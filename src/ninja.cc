@@ -776,7 +776,8 @@ int NinjaMain::ToolWinCodePage(const Options* options, int argc, char* argv[]) {
 #endif
 
 enum PrintCommandMode { PCM_Single, PCM_All };
-void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode) {
+void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode,
+                   int version) {
   if (!edge)
     return;
   if (!seen->insert(edge).second)
@@ -785,11 +786,11 @@ void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode) {
   if (mode == PCM_All) {
     for (vector<Node*>::iterator in = edge->inputs_.begin();
          in != edge->inputs_.end(); ++in)
-      PrintCommands((*in)->in_edge(), seen, mode);
+      PrintCommands((*in)->in_edge(), seen, mode, version);
   }
 
   if (!edge->is_phony())
-    puts(edge->EvaluateCommand().c_str());
+    puts(edge->EvaluateCommand(version).c_str());
 }
 
 int NinjaMain::ToolCommands(const Options* options, int argc, char* argv[]) {
@@ -829,7 +830,7 @@ int NinjaMain::ToolCommands(const Options* options, int argc, char* argv[]) {
 
   EdgeSet seen;
   for (vector<Node*>::iterator in = nodes.begin(); in != nodes.end(); ++in)
-    PrintCommands((*in)->in_edge(), &seen, mode);
+    PrintCommands((*in)->in_edge(), &seen, mode, state_.minimum_version_);
 
   return 0;
 }
@@ -1040,8 +1041,9 @@ enum EvaluateCommandMode {
   ECM_EXPAND_RSPFILE
 };
 std::string EvaluateCommandWithRspfile(const Edge* edge,
-                                       const EvaluateCommandMode mode) {
-  string command = edge->EvaluateCommand();
+                                       const EvaluateCommandMode mode,
+                                       int version) {
+  string command = edge->EvaluateCommand(version);
   if (mode == ECM_NORMAL)
     return command;
 
@@ -1056,7 +1058,7 @@ std::string EvaluateCommandWithRspfile(const Edge* edge,
        command.find("-f ") != index - 3))
     return command;
 
-  string rspfile_content = edge->GetBinding("rspfile_content");
+  string rspfile_content = edge->GetBinding("rspfile_content", false);
   size_t newline_index = 0;
   while ((newline_index = rspfile_content.find('\n', newline_index)) !=
          string::npos) {
@@ -1086,8 +1088,8 @@ bool IsValidationOnlyEdge(const Edge* edge) {
 }
 
 void PrintCompdbObjectsForEdge(std::string const& directory, const Edge* const edge,
-                               const EvaluateCommandMode eval_mode) {
-  const auto& command = EvaluateCommandWithRspfile(edge, eval_mode);
+                               const EvaluateCommandMode eval_mode, int version) {
+  const auto& command = EvaluateCommandWithRspfile(edge, eval_mode, version);
   bool first = true;
 
   for (const Node* input : edge->inputs_) {
@@ -1150,7 +1152,7 @@ int NinjaMain::ToolCompilationDatabase(const Options* options, int argc,
       if (!first) {
         putchar(',');
       }
-      PrintCompdbObjectsForEdge(directory, edge, eval_mode);
+      PrintCompdbObjectsForEdge(directory, edge, eval_mode, state_.minimum_version_);
       first = false;
     } else {
       for (int i = 0; i != argc; ++i) {
@@ -1158,7 +1160,7 @@ int NinjaMain::ToolCompilationDatabase(const Options* options, int argc,
           if (!first) {
             putchar(',');
           }
-          PrintCompdbObjectsForEdge(directory, edge, eval_mode);
+          PrintCompdbObjectsForEdge(directory, edge, eval_mode, state_.minimum_version_);
           first = false;
         }
       }
@@ -1297,7 +1299,7 @@ struct CompdbTargets {
 };
 
 void PrintCompdb(std::string const& directory, std::vector<Edge*> const& edges,
-                 const EvaluateCommandMode eval_mode) {
+                 const EvaluateCommandMode eval_mode, int version) {
   putchar('[');
 
   bool first = true;
@@ -1306,7 +1308,7 @@ void PrintCompdb(std::string const& directory, std::vector<Edge*> const& edges,
       continue;
     if (!first)
       putchar(',');
-    PrintCompdbObjectsForEdge(directory, edge, eval_mode);
+    PrintCompdbObjectsForEdge(directory, edge, eval_mode, version);
     first = false;
   }
 
@@ -1348,7 +1350,7 @@ int NinjaMain::ToolCompilationDatabaseForTargets(const Options* options,
     }
 
     std::string directory = GetWorkingDirectory();
-    PrintCompdb(directory, collector.in_edges, compdb.eval_mode);
+    PrintCompdb(directory, collector.in_edges, compdb.eval_mode, state_.minimum_version_);
   } break;
   }
 

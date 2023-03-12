@@ -21,6 +21,8 @@
 /// be "git" on trunk.
 extern const char* kNinjaVersion;
 
+enum FeatureVersion { kFeatureVersion_ExtendedProcessLaunch = 2000000 };
+
 /// Parse the major/minor components of a version string.
 void ParseVersion(const std::string& version, int* major, int* minor);
 

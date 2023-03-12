@@ -54,11 +54,41 @@ const char kFileSignature[] = "# ninja log v%d\n";
 const int kOldestSupportedVersion = 7;
 const int kCurrentVersion = 7;
 
+const uint64_t command_raw_hash = rapidhash("raw", 3);
+uint64_t global_environment_hash = 0;
+
 }  // namespace
 
 // static
-uint64_t BuildLog::LogEntry::HashCommand(StringPiece command) {
+uint64_t BuildLog::LogEntry::HashCommandPiece(StringPiece command) {
   return rapidhash(command.str_, command.len_);
+}
+
+// static
+uint64_t BuildLog::LogEntry::HashCommand(const SubprocessArguments& args) {
+  uint64_t hash = rapidhash(args.command_.c_str(), args.command_.size());
+
+  if (args.environment_.size())
+    hash ^= rapidhash(args.environment_.c_str(), args.environment_.size());
+
+  if (args.command_cwd_.size())
+    hash ^= rapidhash(args.command_cwd_.c_str(), args.command_cwd_.size());
+
+  if (args.command_raw_)
+    hash ^= command_raw_hash;
+
+  if (global_environment_hash)
+    hash ^= global_environment_hash;
+
+  return hash;
+}
+
+void BuildLog::LogEntry::GlobalEnvironmentHash(const std::string& environment,
+                                               bool override) {
+  global_environment_hash =
+      rapidhash(environment.c_str(), environment.size());
+  if (override)
+    global_environment_hash ^= rapidhash("override", 8);
 }
 
 BuildLog::LogEntry::LogEntry(std::string output) : output(std::move(output)) {}
@@ -87,10 +117,12 @@ bool BuildLog::OpenForWrite(const std::string& path, const BuildLogUser& user,
   return true;
 }
 
-bool BuildLog::RecordCommand(Edge* edge, int start_time, int end_time,
-                             TimeStamp mtime) {
-  std::string command = edge->EvaluateCommand(true);
-  uint64_t command_hash = LogEntry::HashCommand(command);
+bool BuildLog::RecordCommand(Edge* edge, int version, int start_time,
+                             int end_time, TimeStamp mtime) {
+  SubprocessArguments args;
+  edge->EvaluateCommand(args, version, /*incl_rsp_file=*/true);
+
+  uint64_t command_hash = LogEntry::HashCommand(args);
   for (std::vector<Node*>::iterator out = edge->outputs_.begin();
        out != edge->outputs_.end(); ++out) {
     const std::string& path = (*out)->path();
