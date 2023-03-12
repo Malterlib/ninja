@@ -15,6 +15,7 @@
 #include <assert.h>
 
 #include "eval_env.h"
+#include "version.h"
 
 using namespace std;
 
@@ -74,7 +75,14 @@ bool Rule::IsPhony() const {
 }
 
 // static
-bool Rule::IsReservedBinding(const string& var) {
+bool Rule::IsReservedBinding(const string& var, int version) {
+  if (version >= kFeatureVersion_ExtendedProcessLaunch) {
+    if (var == "command_cwd" ||
+        var == "command_raw" ||
+        var == "environment")
+      return true;
+  }
+
   return var == "command" ||
       var == "depfile" ||
       var == "dyndep" ||
