@@ -682,27 +682,47 @@ yy70:
     }
 yy71:
 	yych = *++p;
-	if (yybm[0+yych] & 64) goto yy79;
-	if (yych <= '#') {
-		if (yych <= '\f') {
-			if (yych == '\n') goto yy75;
-			goto yy73;
+	if (yych <= '9') {
+		if (yych <= ' ') {
+			if (yych <= '\f') {
+				if (yych == '\n') goto yy75;
+				goto yy73;
+			} else {
+				if (yych <= '\r') goto yy76;
+				if (yych <= 0x1F) goto yy73;
+				goto yy77;
+			}
 		} else {
-			if (yych <= '\r') goto yy76;
-			if (yych == ' ') goto yy77;
-			goto yy73;
+			if (yych <= ',') {
+				if (yych == '$') goto yy78;
+				goto yy73;
+			} else {
+				if (yych <= '-') goto yy79;
+				if (yych <= '/') goto yy73;
+				goto yy79;
+			}
 		}
 	} else {
-		if (yych <= ']') {
-			if (yych <= '$') goto yy78;
-			if (yych <= '/') goto yy73;
-			if (yych <= ':') goto yy80;
-			goto yy73;
+		if (yych <= '_') {
+			if (yych <= 'Z') {
+				if (yych <= ':') goto yy81;
+				if (yych <= '@') goto yy73;
+				goto yy79;
+			} else {
+				if (yych <= ']') goto yy73;
+				if (yych <= '^') goto yy82;
+				goto yy79;
+			}
 		} else {
-			if (yych <= '^') goto yy81;
-			if (yych <= '`') goto yy73;
-			if (yych <= '{') goto yy82;
-			goto yy73;
+			if (yych <= 'n') {
+				if (yych <= '`') goto yy73;
+				if (yych <= 'm') goto yy79;
+				goto yy83;
+			} else {
+				if (yych <= 'z') goto yy79;
+				if (yych <= '{') goto yy84;
+				goto yy73;
+			}
 		}
 	}
 yy72:
@@ -727,7 +747,7 @@ yy75:
     }
 yy76:
 	yych = *++p;
-	if (yych == '\n') goto yy83;
+	if (yych == '\n') goto yy85;
 	goto yy74;
 yy77:
 	++p;
@@ -743,18 +763,19 @@ yy78:
     }
 yy79:
 	yych = *++p;
+yy80:
 	if (yybm[0+yych] & 64) goto yy79;
 	{
       eval->AddSpecial(StringPiece(start + 1, p - start - 1));
       continue;
     }
-yy80:
+yy81:
 	++p;
 	{
       eval->AddText(StringPiece(":", 1));
       continue;
     }
-yy81:
+yy82:
 	++p;
 	{
       if (!newline_version_checked_)
@@ -770,23 +791,33 @@ yy81:
       eval->AddText(StringPiece("\n", 1));
       continue;
     }
-yy82:
-	yych = *(q = ++p);
-	if (yybm[0+yych] & 128) goto yy84;
-	goto yy74;
 yy83:
 	yych = *++p;
-	if (yych == ' ') goto yy83;
+	if (yych == '\n') goto yy86;
+	goto yy80;
+yy84:
+	yych = *(q = ++p);
+	if (yybm[0+yych] & 128) goto yy87;
+	goto yy74;
+yy85:
+	yych = *++p;
+	if (yych == ' ') goto yy85;
 	{
       continue;
     }
-yy84:
+yy86:
+	++p;
+	{
+      eval->AddText(StringPiece("\n", 1));
+      continue;
+    }
+yy87:
 	yych = *++p;
-	if (yybm[0+yych] & 128) goto yy84;
-	if (yych == '}') goto yy85;
+	if (yybm[0+yych] & 128) goto yy87;
+	if (yych == '}') goto yy88;
 	p = q;
 	goto yy74;
-yy85:
+yy88:
 	++p;
 	{
       eval->AddSpecial(StringPiece(start + 2, p - start - 3));
