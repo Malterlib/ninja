@@ -24,11 +24,11 @@
 #include <string>
 
 #ifdef _WIN32
-#include "getopt.h"
+#include "getopt_local.h"
 #include <direct.h>
 #include <windows.h>
 #elif defined(_AIX)
-#include "getopt.h"
+#include "getopt_local.h"
 #include <unistd.h>
 #else
 #include <getopt.h>
