@@ -29,6 +29,7 @@
 #include "metrics.h"
 #include "state.h"
 #include "util.h"
+#include "version.h"
 
 using namespace std;
 
@@ -36,18 +37,21 @@ namespace {
 
 /// execute hash only once in lifetime of object and only on request
 struct LazyEdgeCommandHash {
-  LazyEdgeCommandHash(const Edge* edge) : edge_(edge) {}
+  LazyEdgeCommandHash(const Edge* edge, int version)
+      : edge_(edge), version_(version) {}
   std::uint64_t operator()() {
     if (!valid_) {
       valid_ = true;
-      return command_ = BuildLog::LogEntry::HashCommand(
-                 edge_->EvaluateCommand(/*incl_rsp_file=*/true));
+      SubprocessArguments args;
+      edge_->EvaluateCommand(args, version_, /*incl_rsp_file=*/true);
+      return command_ = BuildLog::LogEntry::HashCommand(args);
     }
     return command_;
   }
 
  private:
   const Edge* edge_;
+  int version_;
   std::uint64_t command_ = 0;
   bool valid_ = false;
 };
@@ -96,9 +100,10 @@ class RecomputeOutputsDirtyCache {
 
  public:
   RecomputeOutputsDirtyCache(BuildLog* build_log,
-                             OptionalExplanations& explanations, Edge* edge)
+                             OptionalExplanations& explanations, Edge* edge,
+                             int version)
       : buildLog_(build_log), explanations_(explanations), edge_(edge),
-        logEntry_(edge->outputs_.size()) {}
+        logEntry_(edge->outputs_.size()), commandHash_(edge, version) {}
 
   /// Determines whether at least one output of edge 'edge_' is considered dirty.
   ///
@@ -141,7 +146,7 @@ class RecomputeOutputsDirtyCache {
   bool generator_ = false;
   bool generatorValid_ = false;
   std::vector<CachedLogEntry> logEntry_;
-  LazyEdgeCommandHash commandHash_ = LazyEdgeCommandHash(edge_);
+  LazyEdgeCommandHash commandHash_;
 
 #ifndef NDEBUG
   std::vector<const Node*> checkOutputs_;
@@ -482,7 +487,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   // We may also be dirty due to output state: missing outputs, out of
   // date outputs, etc.  Visit all outputs and determine whether they're dirty.
   RecomputeOutputsDirtyCache recomputeOutputsDirty(build_log(), explanations_,
-                                                edge);
+                                                edge, state_->minimum_version_);
   if (!dirty)
     dirty = recomputeOutputsDirty.all(most_recent_input);
 
@@ -584,7 +589,8 @@ bool DependencyScan::VerifyDAG(Node* node, vector<Node*>* stack, string* err) {
 
 bool DependencyScan::RecomputeOutputsDirty(Edge* edge, Node* most_recent_input,
                                            bool* outputs_dirty, string* err) {
-  *outputs_dirty = RecomputeOutputsDirtyCache(build_log(), explanations_, edge)
+  *outputs_dirty = RecomputeOutputsDirtyCache(build_log(), explanations_, edge,
+                                             state_->minimum_version_)
                        .all(most_recent_input);
   return true;
 }
@@ -609,7 +615,7 @@ bool Edge::AllInputsReady() const {
 
 /// An Env for an Edge, providing $in and $out.
 struct EdgeEnv : public Env {
-  enum EscapeKind { kShellEscape, kDoNotEscape };
+  enum EscapeKind { kShellEscape, kRawEscape, kDoNotEscape };
 
   EdgeEnv(const Edge* const edge, const EscapeKind escape)
       : edge_(edge), escape_in_out_(escape), recursive_(false) {}
@@ -715,6 +721,8 @@ std::string EdgeEnv::MakePathList(const Node* const* const span,
 #else
       GetShellEscapedString(path, &result);
 #endif
+    } else if (escape_in_out_ == kRawEscape) {
+      GetRawEscapedString(path, &result);
     } else {
       result.append(path);
     }
@@ -722,23 +730,58 @@ std::string EdgeEnv::MakePathList(const Node* const* const span,
   return result;
 }
 
-std::string Edge::EvaluateCommand(const bool incl_rsp_file) const {
-  string command = GetBinding("command");
+void Edge::EvaluateCommand(SubprocessArguments& args, int version,
+                           bool incl_rsp_file) const {
+  if (version >= kFeatureVersion_ExtendedProcessLaunch) {
+    bool use_raw = GetBindingBool("command_raw");
+    args.command_raw_ = use_raw;
+    args.command_ = GetBinding("command", use_raw);
+    args.environment_ = GetBinding("environment", true);
+    args.command_cwd_ = GetUnescapedBinding("command_cwd");
+  } else {
+    args.command_ = GetBinding("command", false);
+  }
+
   if (incl_rsp_file) {
-    string rspfile_content = GetBinding("rspfile_content");
+    string rspfile_content = GetBinding("rspfile_content", true);
+    if (!rspfile_content.empty())
+      args.command_ += ";rspfile=" + rspfile_content;
+  }
+}
+
+std::string Edge::EvaluateCommand(int version, const bool incl_rsp_file) const {
+  bool use_raw = false;
+  if (version >= kFeatureVersion_ExtendedProcessLaunch) {
+    use_raw = GetBindingBool("command_raw");
+  }
+
+  std::string command = GetBinding("command", use_raw);
+
+  if (incl_rsp_file) {
+    string rspfile_content = GetBinding("rspfile_content", true);
     if (!rspfile_content.empty())
       command += ";rspfile=" + rspfile_content;
   }
   return command;
 }
 
-std::string Edge::GetBinding(StringPiece key) const {
-  EdgeEnv env(this, EdgeEnv::kShellEscape);
+std::string Edge::GetUnescapedBinding(StringPiece key) const {
+  EdgeEnv env(this, EdgeEnv::kDoNotEscape);
   return env.LookupVariable(key);
 }
 
+std::string Edge::GetBinding(StringPiece key, bool raw_escape) const {
+  if (raw_escape) {
+    EdgeEnv env(this, EdgeEnv::kRawEscape);
+    return env.LookupVariable(key);
+  } else {
+    EdgeEnv env(this, EdgeEnv::kShellEscape);
+    return env.LookupVariable(key);
+  }
+}
+
 bool Edge::GetBindingBool(StringPiece key) const {
-  return !GetBinding(key).empty();
+  return !GetUnescapedBinding(key).empty();
 }
 
 string Edge::GetUnescapedDepfile() const {
@@ -841,7 +884,7 @@ void Node::Dump(const char* prefix) const {
 
 std::optional<EdgeInputsRange> ImplicitDepLoader::LoadDeps(Edge* edge,
                                                            string* err) {
-  string deps_type = edge->GetBinding("deps");
+  string deps_type = edge->GetUnescapedBinding("deps");
   if (!deps_type.empty())
     return LoadDepsFromLog(edge, err);
 
@@ -854,7 +897,7 @@ std::optional<EdgeInputsRange> ImplicitDepLoader::LoadDeps(Edge* edge,
 }
 
 bool ImplicitDepLoader::LoadDepsTry(const Edge* edge, string* err) const {
-  string deps_type = edge->GetBinding("deps");
+  string deps_type = edge->GetUnescapedBinding("deps");
   if (!deps_type.empty())
     return LoadDepsFromLogTry(edge, err);
 

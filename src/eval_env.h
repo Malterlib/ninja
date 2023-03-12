@@ -75,7 +75,7 @@ struct Rule {
 
   void AddBinding(const std::string& key, const EvalString& val);
 
-  static bool IsReservedBinding(StringPiece var);
+  static bool IsReservedBinding(StringPiece var, int version);
 
   const EvalString* GetBinding(StringPiece key) const;
 

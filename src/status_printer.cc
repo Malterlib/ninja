@@ -208,7 +208,7 @@ void StatusPrinter::RecalculateProgressPrediction() {
 
 void StatusPrinter::BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
                                       int64_t end_time_millis, ExitStatus exit_code,
-                                      const string& output) {
+                                      const string& output, int version) {
   time_millis_ = end_time_millis;
   ++finished_edges_;
 
@@ -247,7 +247,7 @@ void StatusPrinter::BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
     } else {
         printer_.PrintOnNewLine(failed + outputs + "\n");
     }
-    printer_.PrintOnNewLine(edge->EvaluateCommand() + "\n");
+    printer_.PrintOnNewLine(edge->EvaluateCommand(version) + "\n");
   }
 
   if (!output.empty()) {
@@ -523,9 +523,9 @@ void StatusPrinter::PrintStatus(const Edge* edge, int64_t time_millis) {
 
   bool force_full_command = config_.verbosity == BuildConfig::VERBOSE;
 
-  string description = edge->GetBinding("description");
+  string description = edge->GetUnescapedBinding("description");
   if (description.empty() || force_full_command)
-    description = edge->GetBinding("command");
+    description = edge->GetBinding("command", false);
 
   string to_print;
   if (status_eval_) {
@@ -539,6 +539,7 @@ void StatusPrinter::PrintStatus(const Edge* edge, int64_t time_millis) {
     to_print = FormatProgressStatus(progress_status_format_, time_millis)
         + description;
   }
+  to_print += " ";
 
   printer_.Print(to_print,
                  force_full_command ? LinePrinter::FULL : LinePrinter::ELIDE);

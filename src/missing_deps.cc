@@ -89,7 +89,7 @@ void MissingDependencyScanner::ProcessNode(Node* node) {
     ProcessNode(*in);
   }
 
-  std::string deps_type = edge->GetBinding("deps");
+  std::string deps_type = edge->GetUnescapedBinding("deps");
   if (!deps_type.empty()) {
     DepsLog::Deps* deps = deps_log_->GetDeps(node);
     if (deps)
