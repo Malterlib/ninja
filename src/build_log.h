@@ -20,6 +20,7 @@
 
 #include "hash_map.h"
 #include "load_status.h"
+#include "subprocess_arguments.h"
 #include "timestamp.h"
 #include "util.h"  // uint64_t
 
@@ -48,7 +49,7 @@ struct BuildLog {
   /// happen when/if it's needed
   bool OpenForWrite(const std::string& path, const BuildLogUser& user,
                     std::string* err);
-  bool RecordCommand(Edge* edge, int start_time, int end_time,
+  bool RecordCommand(Edge* edge, int version, int start_time, int end_time,
                      TimeStamp mtime = 0);
   void Close();
 
@@ -62,7 +63,11 @@ struct BuildLog {
     int end_time;
     TimeStamp mtime;
 
-    static uint64_t HashCommand(StringPiece command);
+    static uint64_t HashCommandPiece(StringPiece command);
+    static uint64_t HashCommand(const SubprocessArguments& args);
+
+    static void GlobalEnvironmentHash(const std::string& environment,
+                                      bool override);
 
     // Used by tests.
     bool operator==(const LogEntry& o) const {

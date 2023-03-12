@@ -67,7 +67,7 @@ bool ManifestParser::Parse(const string& filename, const string& input,
       // Check ninja_required_version immediately so we can exit
       // before encountering any syntactic surprises.
       if (name == "ninja_required_version")
-        CheckNinjaVersion(value);
+        state_->minimum_version_ = CheckNinjaVersion(value);
       env_->AddBinding(name, value);
       break;
     }
@@ -151,7 +151,7 @@ bool ManifestParser::ParseRule(string* err) {
     if (!ParseLet(&key, &value, err))
       return false;
 
-    if (Rule::IsReservedBinding(key)) {
+    if (Rule::IsReservedBinding(key, state_->minimum_version_)) {
       rule->AddBinding(key, value);
     } else {
       // Die on other keyvals for now; revisit if we want to add a

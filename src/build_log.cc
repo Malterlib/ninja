@@ -104,12 +104,41 @@ uint64_t MurmurHash64A(const void* key, size_t len) {
 }
 #undef BIG_CONSTANT
 
+const uint64_t command_raw_hash = MurmurHash64A("raw", 3);
+uint64_t global_environment_hash = 0;
 
 }  // namespace
 
 // static
-uint64_t BuildLog::LogEntry::HashCommand(StringPiece command) {
+uint64_t BuildLog::LogEntry::HashCommandPiece(StringPiece command) {
   return MurmurHash64A(command.str_, command.len_);
+}
+
+// static
+uint64_t BuildLog::LogEntry::HashCommand(const SubprocessArguments& args) {
+  uint64_t hash = MurmurHash64A(args.command_.c_str(), args.command_.size());
+
+  if (args.environment_.size())
+    hash ^= MurmurHash64A(args.environment_.c_str(), args.environment_.size());
+
+  if (args.command_cwd_.size())
+    hash ^= MurmurHash64A(args.command_cwd_.c_str(), args.command_cwd_.size());
+
+  if (args.command_raw_)
+    hash ^= command_raw_hash;
+
+  if (global_environment_hash)
+    hash ^= global_environment_hash;
+
+  return hash;
+}
+
+void BuildLog::LogEntry::GlobalEnvironmentHash(const std::string& environment,
+                                               bool override) {
+  global_environment_hash =
+      MurmurHash64A(environment.c_str(), environment.size());
+  if (override)
+    global_environment_hash ^= MurmurHash64A("override", 8);
 }
 
 BuildLog::LogEntry::LogEntry(const string& output)
@@ -141,10 +170,12 @@ bool BuildLog::OpenForWrite(const string& path, const BuildLogUser& user,
   return true;
 }
 
-bool BuildLog::RecordCommand(Edge* edge, int start_time, int end_time,
-                             TimeStamp mtime) {
-  string command = edge->EvaluateCommand(true);
-  uint64_t command_hash = LogEntry::HashCommand(command);
+bool BuildLog::RecordCommand(Edge* edge, int version, int start_time,
+                             int end_time, TimeStamp mtime) {
+  SubprocessArguments args;
+  edge->EvaluateCommand(args, version, /*incl_rsp_file=*/true);
+  uint64_t command_hash = LogEntry::HashCommand(args);
+
   for (vector<Node*>::iterator out = edge->outputs_.begin();
        out != edge->outputs_.end(); ++out) {
     const string& path = (*out)->path();

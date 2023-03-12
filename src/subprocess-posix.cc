@@ -23,6 +23,11 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <spawn.h>
+#include <set>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 #if defined(USE_PPOLL)
 #include <poll.h>
@@ -32,13 +37,26 @@
 
 extern char** environ;
 
+#include "build_log.h"
+#include "null_terminated_string_array.h"
 #include "util.h"
 
 using namespace std;
 
-Subprocess::Subprocess(bool use_console) : fd_(-1), pid_(-1),
-                                           use_console_(use_console) {
-}
+namespace {
+NullTerminatedStringArray overridden_environment;
+#if defined(__linux__)
+int (*local_posix_spawn_file_actions_addchdir_np)(
+    posix_spawn_file_actions_t* __restrict __actions,
+    const char* __restrict __path) =
+    (int (*)(posix_spawn_file_actions_t* __restrict __actions,
+             const char* __restrict __path))
+        dlsym(RTLD_DEFAULT, "posix_spawn_file_actions_addchdir_np");
+#endif
+}  // namespace
+
+Subprocess::Subprocess(SubprocessArguments&& args)
+    : fd_(-1), pid_(-1), args_(std::move(args)) {}
 
 Subprocess::~Subprocess() {
   if (fd_ >= 0)
@@ -48,7 +66,26 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
-bool Subprocess::Start(SubprocessSet* set, const string& command) {
+void Subprocess::OverrideEnvironment(const std::string& environment) {
+  std::set<std::string> overridden_variables;
+  overridden_environment.AddEnvironment(environment, overridden_variables,
+                                        environ);
+  overridden_environment.GetPointerArray();
+
+  BuildLog::LogEntry::GlobalEnvironmentHash(environment, true);
+}
+
+void Subprocess::AppendEnvironment(const std::string& environment) {
+  std::set<std::string> overridden_variables;
+  overridden_environment.AddEnvironment(environment, overridden_variables,
+                                        nullptr);
+  overridden_environment.AddUnsetEnvironment(environ, overridden_variables);
+  overridden_environment.GetPointerArray();
+
+  BuildLog::LogEntry::GlobalEnvironmentHash(environment, false);
+}
+
+bool Subprocess::Start(SubprocessSet* set) {
   int output_pipe[2];
   if (pipe(output_pipe) < 0)
     Fatal("pipe: %s", strerror(errno));
@@ -65,6 +102,27 @@ bool Subprocess::Start(SubprocessSet* set, const string& command) {
   int err = posix_spawn_file_actions_init(&action);
   if (err != 0)
     Fatal("posix_spawn_file_actions_init: %s", strerror(err));
+
+  if (!args_.command_cwd_.empty()) {
+#if defined(__APPLE__)
+    if (__builtin_available(macOS 10.15, *)) {
+      err = posix_spawn_file_actions_addchdir_np(&action,
+                                                 args_.command_cwd_.c_str());
+    } else
+#elif defined(__linux__)
+    if (local_posix_spawn_file_actions_addchdir_np) {
+      err = local_posix_spawn_file_actions_addchdir_np(
+          &action, args_.command_cwd_.c_str());
+    } else
+#endif
+    {
+      Fatal(
+          "posix_spawn_file_actions_addchdir_np not available on this OS so"
+          " command_chdir is not supported");
+    }
+    if (err != 0)
+      Fatal("posix_spawn_file_actions_addchdir_np: %s", strerror(err));
+  }
 
   err = posix_spawn_file_actions_addclose(&action, output_pipe[0]);
   if (err != 0)
@@ -85,7 +143,7 @@ bool Subprocess::Start(SubprocessSet* set, const string& command) {
   // default action in the new process image, so no explicit
   // POSIX_SPAWN_SETSIGDEF parameter is needed.
 
-  if (!use_console_) {
+  if (!args_.use_console_) {
     // Put the child in its own process group, so ctrl-c won't reach it.
     flags |= POSIX_SPAWN_SETPGROUP;
     // No need to posix_spawnattr_setpgroup(&attr, 0), it's the default.
@@ -117,9 +175,47 @@ bool Subprocess::Start(SubprocessSet* set, const string& command) {
   if (err != 0)
     Fatal("posix_spawnattr_setflags: %s", strerror(err));
 
-  const char* spawned_args[] = { "/bin/sh", "-c", command.c_str(), NULL };
-  err = posix_spawn(&pid_, "/bin/sh", &action, &attr,
-        const_cast<char**>(spawned_args), environ);
+  NullTerminatedStringArray merged_environment;
+
+  char** spawn_environ = environ;
+
+  if (!args_.environment_.empty()) {
+    std::set<std::string> set_variables;
+    merged_environment.AddEnvironment(args_.environment_, set_variables,
+                                      nullptr);
+
+    if (overridden_environment.valid) {
+      merged_environment.AddUnsetEnvironment(
+          overridden_environment.GetPointerArray(), set_variables);
+    } else {
+      merged_environment.AddUnsetEnvironment(environ, set_variables);
+    }
+
+    spawn_environ = merged_environment.GetPointerArray();
+  } else if (overridden_environment.valid) {
+    spawn_environ = overridden_environment.GetPointerArray();
+  }
+
+  if (args_.command_raw_) {
+    NullTerminatedStringArray spawned_args;
+    spawned_args.AddArguments(args_.command_);
+    auto* spawned_args_pointers = spawned_args.GetPointerArray();
+
+    if (!*spawned_args_pointers)
+      Fatal("posix_spawn: command was not specified");
+
+    err = posix_spawn(&pid_, *spawned_args_pointers, &action, &attr,
+                      spawned_args_pointers, spawn_environ);
+
+    if (err != 0)
+      Fatal("posix_spawn(\"%s\"): %s", *spawned_args_pointers, strerror(err));
+  } else {
+    const char* spawned_args[] = { "/bin/sh", "-c", args_.command_.c_str(),
+                                   NULL };
+    err = posix_spawn(&pid_, "/bin/sh", &action, &attr,
+                      const_cast<char**>(spawned_args), spawn_environ);
+  }
+
   if (err != 0)
     Fatal("posix_spawn: %s", strerror(err));
 
@@ -238,9 +334,9 @@ SubprocessSet::~SubprocessSet() {
     Fatal("sigprocmask: %s", strerror(errno));
 }
 
-Subprocess *SubprocessSet::Add(const string& command, bool use_console) {
-  Subprocess *subprocess = new Subprocess(use_console);
-  if (!subprocess->Start(this, command)) {
+Subprocess* SubprocessSet::Add(SubprocessArguments&& args) {
+  Subprocess* subprocess = new Subprocess(std::move(args));
+  if (!subprocess->Start(this)) {
     delete subprocess;
     return 0;
   }
@@ -359,7 +455,7 @@ void SubprocessSet::Clear() {
        i != running_.end(); ++i)
     // Since the foreground process is in our process group, it will receive
     // the interruption signal (i.e. SIGINT or SIGTERM) at the same time as us.
-    if (!(*i)->use_console_)
+    if (!(*i)->args_.use_console_)
       kill(-(*i)->pid_, interrupted_);
   for (vector<Subprocess*>::iterator i = running_.begin();
        i != running_.end(); ++i)

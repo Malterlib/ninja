@@ -703,7 +703,8 @@ int NinjaMain::ToolWinCodePage(const Options* options, int argc, char* argv[]) {
 #endif
 
 enum PrintCommandMode { PCM_Single, PCM_All };
-void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode) {
+void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode,
+                   int version) {
   if (!edge)
     return;
   if (!seen->insert(edge).second)
@@ -712,11 +713,11 @@ void PrintCommands(Edge* edge, EdgeSet* seen, PrintCommandMode mode) {
   if (mode == PCM_All) {
     for (vector<Node*>::iterator in = edge->inputs_.begin();
          in != edge->inputs_.end(); ++in)
-      PrintCommands((*in)->in_edge(), seen, mode);
+      PrintCommands((*in)->in_edge(), seen, mode, version);
   }
 
   if (!edge->is_phony())
-    puts(edge->EvaluateCommand().c_str());
+    puts(edge->EvaluateCommand(version).c_str());
 }
 
 int NinjaMain::ToolCommands(const Options* options, int argc, char* argv[]) {
@@ -756,7 +757,7 @@ int NinjaMain::ToolCommands(const Options* options, int argc, char* argv[]) {
 
   EdgeSet seen;
   for (vector<Node*>::iterator in = nodes.begin(); in != nodes.end(); ++in)
-    PrintCommands((*in)->in_edge(), &seen, mode);
+    PrintCommands((*in)->in_edge(), &seen, mode, state_.minimum_version_);
 
   return 0;
 }
@@ -886,8 +887,9 @@ enum EvaluateCommandMode {
   ECM_EXPAND_RSPFILE
 };
 std::string EvaluateCommandWithRspfile(const Edge* edge,
-                                       const EvaluateCommandMode mode) {
-  string command = edge->EvaluateCommand();
+                                       const EvaluateCommandMode mode,
+                                       int version) {
+  string command = edge->EvaluateCommand(version);
   if (mode == ECM_NORMAL)
     return command;
 
@@ -920,11 +922,11 @@ std::string EvaluateCommandWithRspfile(const Edge* edge,
 }
 
 void printCompdb(const char* const directory, const Edge* const edge,
-                 const EvaluateCommandMode eval_mode) {
+                 const EvaluateCommandMode eval_mode, int version) {
   printf("\n  {\n    \"directory\": \"");
   PrintJSONString(directory);
   printf("\",\n    \"command\": \"");
-  PrintJSONString(EvaluateCommandWithRspfile(edge, eval_mode));
+  PrintJSONString(EvaluateCommandWithRspfile(edge, eval_mode, version));
   printf("\",\n    \"file\": \"");
   PrintJSONString(edge->inputs_[0]->path());
   printf("\",\n    \"output\": \"");
@@ -986,7 +988,7 @@ int NinjaMain::ToolCompilationDatabase(const Options* options, int argc,
       if (!first) {
         putchar(',');
       }
-      printCompdb(&cwd[0], *e, eval_mode);
+      printCompdb(&cwd[0], *e, eval_mode, state_.minimum_version_);
       first = false;
     } else {
       for (int i = 0; i != argc; ++i) {
@@ -994,7 +996,7 @@ int NinjaMain::ToolCompilationDatabase(const Options* options, int argc,
           if (!first) {
             putchar(',');
           }
-          printCompdb(&cwd[0], *e, eval_mode);
+          printCompdb(&cwd[0], *e, eval_mode, state_.minimum_version_);
           first = false;
         }
       }

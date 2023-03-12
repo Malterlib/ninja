@@ -140,6 +140,8 @@ struct State {
 
   BindingEnv bindings_;
   std::vector<Node*> defaults_;
+
+  int minimum_version_ = 0;
 };
 
 #endif  // NINJA_STATE_H_

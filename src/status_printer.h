@@ -32,7 +32,8 @@ struct StatusPrinter : Status {
   virtual void BuildEdgeStarted(const Edge* edge, int64_t start_time_millis);
   virtual void BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
                                  int64_t end_time_millis, bool success,
-                                 const std::string& output);
+                                 const std::string& output,
+                                 int version);
   virtual void BuildStarted();
   virtual void BuildFinished();
 

@@ -551,6 +551,7 @@ for name in ['build',
              'state',
              'status_printer',
              'string_piece_util',
+             'null_terminated_string_array',
              'util',
              'version']:
     objs += cxx(name, variables=cxxvariables)
@@ -577,6 +578,7 @@ if platform.is_msvc():
     libs.append('ninja.lib')
 else:
     libs.append('-lninja')
+    libs.append('-ldl')
 
 if platform.is_aix() and not platform.is_os400_pase():
     libs.append('-lperfstat')

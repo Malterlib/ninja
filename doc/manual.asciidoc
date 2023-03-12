@@ -571,8 +571,8 @@ The Ninja log
 
 For each built file, Ninja keeps a log of the command used to build
 it.  Using this log Ninja can know when an existing output was built
-with a different command line than the build files specify (i.e., the
-command line changed) and knows to rebuild the file.
+with a different command line or environment variables than the build files
+specify (i.e., the command line changed) and knows to rebuild the file.
 
 The log file is kept in the build root in a file called `.ninja_log`.
 If you provide a variable named `builddir` in the outermost scope,
@@ -870,7 +870,7 @@ previous one, it closes the previous scope.
 Top-level variables
 ~~~~~~~~~~~~~~~~~~~
 
-Two variables are significant when declared in the outermost file scope.
+Some variables are significant when declared in the outermost file scope.
 
 `builddir`:: a directory for some Ninja output files.  See <<ref_log,the
   discussion of the build log>>.  (You can also store other build output
@@ -879,6 +879,17 @@ Two variables are significant when declared in the outermost file scope.
 `ninja_required_version`:: the minimum version of Ninja required to process
   the build correctly.  See <<ref_versioning,the discussion of versioning>>.
 
+`environment`:: _(Available since Ninja 1.12 and only when
+  `ninja_required_version >= 1.12`)_
+  append these environment variables when launching
+  processes. See <<ref_environment,environment blocks>> discussion.
+
+`override_environment`:: _(Available since Ninja 1.12 and only when
+  `ninja_required_version >= 1.12`)_
+  don't use the process environment when launching
+  processes, instead use only the environment specified. Be aware though that
+  you will need to take into account things such as session specific variables.
+  See <<ref_environment,environment blocks>> discussion.
 
 [[ref_rule]]
 Rule variables
@@ -891,6 +902,30 @@ keys.
 `command` (_required_):: the command line to run.  Each `rule` may
   have only one `command` declaration. See <<ref_rule_command,the next
   section>> for more details on quoting and executing multiple commands.
+
+`command_cwd`:: _(Available since Ninja 1.12 and only when
+  `ninja_required_version >= 1.12`)_
+  the directory that cwd will be set to when running the command. This is only
+  supported if running on Windows, Linux (when
+  posix_spawn_file_actions_addchdir_np is available) and macOS (10.15 and
+  later).
+
+[[ref_command_raw]] `command_raw`:: _(Available since Ninja 1.12 and only when
+  `ninja_required_version >= 1.12`)_ the command will be executed directly with
+  a process launch instead of going through a `/bin/sh -c` on posix. On Windows
+  commands are always executed directly as a process launch, but this setting
+  will allow uniform syntax for specifying command arguments and escape the
+  process launch arguments correctly for Windows. For both Windows and posix the
+  executable will not be located from `PATH`, a full path is always required.
+  See <<ref_command_raw_parsing, raw command parsing>> for how arguments are
+  parsed.
+
+`environment`:: _(Available since Ninja 1.12 and only when
+  `ninja_required_version >= 1.12`)_
+  append these environment variables when launching processes. These environment
+  variables are appended to system environment variables or globally specified
+  environment variables if specified. See <<ref_environment,environment blocks>>
+  discussion.
 
 `depfile`:: path to an optional `Makefile` that contains extra
   _implicit dependencies_ (see <<ref_dependencies,the reference on
@@ -963,6 +998,45 @@ rule link
 build myapp.exe: link a.obj b.obj [possibly many other .obj files]
 ----
 
+[[ref_environment]]
+Environment blocks
+^^^^^^^^^^^^^^^^^^
+Environment blocks specified in `environment` and `override_environment`
+are formatted with one variable on each line. To escape new lines use `\n`.
+To escape `\` use `\\`.
+
+Example usage:
+----
+environment = PATH=C:\\Executables$n
+MY_ENV_VAR=My Value
+
+rule link
+  command = link.exe /OUT$out $in
+  environment = LIB=C:\\Libraries$n
+PATH=C:\\LinkExecutables
+----
+
+For `override_environment` you can also specify lines with only the environment
+variable name without the `=`. In this case the environment variable
+will be copied from the environment ninja is running under:
+
+----
+override_environent = PATH$n
+HOME$n
+LANG$n
+XDG_SESSION_ID$n
+TMP$n
+TMPDIR$n
+MY_ENV_VAR=My Value
+----
+
+The contents of environment block for each process launch is included in the
+the build log hash for a command, so ninja can know to rebuild if the
+environment block changes. The system environment is not included in this
+calculation, so if you want to account for all environment variable changes
+you should use `override_environment` so the environment variables are
+consistent across all invocations.
+
 [[ref_rule_command]]
 Interpretation of the `command` variable
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -984,6 +1058,9 @@ interpretation of the command (such as the use of `&&` to chain
 multiple commands), make the command execute the Windows shell by
 prefixing the command with `cmd /c`. Ninja may error with "invalid parameter"
 which usually indicates that the command line length has been exceeded.
+
+To use uniform quoting that works both on unix and automatically converts to the
+C library quoting on Windows see <<ref_command_raw, `command_raw`>>.
 
 [[ref_outputs]]
 Build outputs
@@ -1076,6 +1153,28 @@ of the main build rule of the source files or of the rules that depend
 on the main build rule would slow down the critical path of the build,
 but using a validation would allow the build to proceed in parallel with
 the static analysis rule once the main build rule is complete.
+
+[[ref_command_raw_parsing]]
+Raw command parsing
+^^^^^^^^^^^^^^^^^^^
+Arguments when parsing raw commands are split by space and strings can be quoted
+with `"` or `'`. The escape character `\` is used for escaping quotes. Use `\"`
+to escape quotes in double quoted strings, and `\'` to escape quotes in single
+quoted strings. To escape `\` use `\\`.
+
+Unix example:
+----
+rule echo
+  command = /bin/echo Test "Test \" Test" 'Test \' Test'
+  command_raw = true
+----
+
+Windows example:
+----
+rule echo
+  command = "C:\\Unix Emu\\echo.exe" Test "Test \" Test" 'Test \' Test'
+  command_raw = true
+----
 
 Variable expansion
 ~~~~~~~~~~~~~~~~~~

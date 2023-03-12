@@ -325,6 +325,16 @@ static inline bool IsKnownShellSafeCharacter(char ch) {
   }
 }
 
+static inline bool IsKnownRawSafeCharacter(char ch) {
+  switch (ch) {
+  case ' ':
+  case '"':
+    return false;
+  default:
+    return true;
+  }
+}
+
 static inline bool IsKnownWin32SafeCharacter(char ch) {
   switch (ch) {
     case ' ':
@@ -333,6 +343,14 @@ static inline bool IsKnownWin32SafeCharacter(char ch) {
     default:
       return true;
   }
+}
+
+static inline bool StringNeedsRawEscaping(const string& input) {
+  for (size_t i = 0; i < input.size(); ++i) {
+    if (!IsKnownRawSafeCharacter(input[i]))
+      return true;
+  }
+  return false;
 }
 
 static inline bool StringNeedsShellEscaping(const string& input) {
@@ -347,6 +365,32 @@ static inline bool StringNeedsWin32Escaping(const string& input) {
     if (!IsKnownWin32SafeCharacter(input[i])) return true;
   }
   return false;
+}
+
+void GetRawEscapedString(const string& input, string* result) {
+  assert(result);
+
+  if (!StringNeedsRawEscaping(input)) {
+    result->append(input);
+    return;
+  }
+
+  const char kQuote = '"';
+  const char kEscapeChar = '\\';
+
+  result->push_back(kQuote);
+
+  string::const_iterator span_begin = input.begin();
+  for (string::const_iterator it = input.begin(), end = input.end(); it != end;
+       ++it) {
+    if (*it == kQuote) {
+      result->append(span_begin, it);
+      result->push_back(kEscapeChar);
+      span_begin = it;
+    }
+  }
+  result->append(span_begin, input.end());
+  result->push_back(kQuote);
 }
 
 void GetShellEscapedString(const string& input, string* result) {

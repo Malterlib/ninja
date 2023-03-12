@@ -147,7 +147,7 @@ private:
 struct CommandRunner {
   virtual ~CommandRunner() {}
   virtual size_t CanRunMore() const = 0;
-  virtual bool StartCommand(Edge* edge) = 0;
+  virtual bool StartCommand(Edge* edge, int version) = 0;
 
   /// The result of waiting for a command.
   struct Result {

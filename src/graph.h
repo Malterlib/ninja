@@ -24,6 +24,7 @@
 #include "dyndep.h"
 #include "eval_env.h"
 #include "explanations.h"
+#include "subprocess_arguments.h"
 #include "timestamp.h"
 #include "util.h"
 
@@ -186,7 +187,11 @@ struct Edge {
   /// Expand all variables in a command and return it as a string.
   /// If incl_rsp_file is enabled, the string will also contain the
   /// full contents of a response file (if applicable)
-  std::string EvaluateCommand(bool incl_rsp_file = false) const;
+  std::string EvaluateCommand(int version = 0,
+                              bool incl_rsp_file = false) const;
+
+  void EvaluateCommand(SubprocessArguments& args, int version,
+                       bool incl_rsp_file = false) const;
 
   /// Returns the shell-escaped value of |key|.
   std::string GetBinding(const std::string& key) const;
@@ -325,7 +330,6 @@ struct ImplicitDepLoader {
   OptionalExplanations explanations_;
 };
 
-
 /// DependencyScan manages the process of scanning the files in a graph
 /// and updating the dirty/outputs_ready state of all the nodes and edges.
 struct DependencyScan {
@@ -333,7 +337,7 @@ struct DependencyScan {
                  DiskInterface* disk_interface,
                  DepfileParserOptions const* depfile_parser_options,
                  Explanations* explanations)
-      : build_log_(build_log), disk_interface_(disk_interface),
+      : state_(state), build_log_(build_log), disk_interface_(disk_interface),
         dep_loader_(state, deps_log, disk_interface, depfile_parser_options,
                     explanations),
         dyndep_loader_(state, disk_interface), explanations_(explanations) {}
@@ -378,10 +382,11 @@ struct DependencyScan {
   /// Recompute whether a given single output should be marked dirty.
   /// Returns true if so.
   bool RecomputeOutputDirty(const Edge* edge, const Node* most_recent_input,
-                            const std::string& command, Node* output);
+                            const SubprocessArguments& args, Node* output);
 
   void RecordExplanation(const Node* node, const char* fmt, ...);
 
+  State* state_;
   BuildLog* build_log_;
   DiskInterface* disk_interface_;
   ImplicitDepLoader dep_loader_;

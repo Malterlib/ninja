@@ -149,8 +149,9 @@ TEST_F(SubprocessTest, InterruptParentWithSigHup) {
 TEST_F(SubprocessTest, Console) {
   // Skip test if we don't have the console ourselves.
   if (isatty(0) && isatty(1) && isatty(2)) {
-    Subprocess* subproc =
-        subprocs_.Add("test -t 0 -a -t 1 -a -t 2", /*use_console=*/true);
+    SubprocessArguments args("test -t 0 -a -t 1 -a -t 2");
+    args.use_console_ = true;
+    Subprocess* subproc = subprocs_.Add(std::move(args));
     ASSERT_NE((Subprocess*)0, subproc);
 
     while (!subproc->Done()) {
