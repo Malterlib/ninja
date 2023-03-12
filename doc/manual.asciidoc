@@ -824,6 +824,9 @@ behaviors:
 `$` followed by a newline:: escape the newline (continue the current line
 across a line break).
 
+`$n` followed by a newline:: escape the newline and add a new line
+character to the value.
+
 `$` followed by text:: a variable reference.
 
 `${varname}`:: alternate syntax for `$varname`.

@@ -237,6 +237,10 @@ bool Lexer::ReadEvalString(EvalString* eval, bool path, string* err) {
       eval->AddText(StringPiece("$", 1));
       continue;
     }
+    "$n\n" {
+      eval->AddText(StringPiece("\n", 1));
+      continue;
+    }
     "$ " {
       eval->AddText(StringPiece(" ", 1));
       continue;
