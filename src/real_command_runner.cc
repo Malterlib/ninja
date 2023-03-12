@@ -22,7 +22,7 @@ struct RealCommandRunner : public CommandRunner {
                              Jobserver::Client* jobserver)
       : config_(config), jobserver_(jobserver) {}
   size_t CanRunMore() const override;
-  bool StartCommand(Edge* edge) override;
+  bool StartCommand(Edge* edge, int version) override;
   bool WaitForCommand(Result* result) override;
   std::vector<Edge*> GetActiveEdges() override;
   void Abort() override;
@@ -84,9 +84,12 @@ size_t RealCommandRunner::CanRunMore() const {
   return capacity;
 }
 
-bool RealCommandRunner::StartCommand(Edge* edge) {
-  std::string command = edge->EvaluateCommand();
-  Subprocess* subproc = subprocs_.Add(command, edge->use_console());
+bool RealCommandRunner::StartCommand(Edge* edge, int version) {
+  SubprocessArguments args;
+  edge->EvaluateCommand(args, version);
+  args.use_console_ = edge->use_console();
+
+  Subprocess* subproc = subprocs_.Add(std::move(args));
   if (!subproc)
     return false;
   subproc_to_edge_.insert(std::make_pair(subproc, edge));

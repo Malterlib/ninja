@@ -145,6 +145,7 @@ add_library(libninja OBJECT
 	src/manifest_parser.cc
 	src/metrics.cc
 	src/missing_deps.cc
+	src/null_terminated_string_array.cc
 	src/parser.cc
 	src/real_command_runner.cc
 	src/state.cc
@@ -189,6 +190,8 @@ else()
 	if(CMAKE_SYSTEM_NAME STREQUAL "AIX")
 		target_link_libraries(libninja PUBLIC "-lperfstat")
 	endif()
+
+	target_link_libraries(libninja PUBLIC "-ldl")
 endif()
 
 target_compile_features(libninja PUBLIC cxx_std_14)

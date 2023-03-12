@@ -497,8 +497,8 @@ TEST_F(CleanDeadTest, CleanDead) {
   string err;
   EXPECT_TRUE(log1.OpenForWrite(kTestFilename, *this, &err));
   ASSERT_EQ("", err);
-  log1.RecordCommand(state.edges_[0], 15, 18);
-  log1.RecordCommand(state.edges_[1], 20, 25);
+  log1.RecordCommand(state.edges_[0], 0, 15, 18);
+  log1.RecordCommand(state.edges_[1], 0, 20, 25);
   log1.Close();
 
   BuildLog log2;
@@ -560,8 +560,8 @@ TEST_F(CleanDeadTest, CleanDeadPreservesInputs) {
   string err;
   EXPECT_TRUE(log1.OpenForWrite(kTestFilename, *this, &err));
   ASSERT_EQ("", err);
-  log1.RecordCommand(state.edges_[0], 15, 18);
-  log1.RecordCommand(state.edges_[1], 20, 25);
+  log1.RecordCommand(state.edges_[0], 0, 15, 18);
+  log1.RecordCommand(state.edges_[1], 0, 20, 25);
   log1.Close();
 
   BuildLog log2;

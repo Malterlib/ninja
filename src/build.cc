@@ -41,6 +41,8 @@
 #include "state.h"
 #include "status.h"
 #include "util.h"
+#include "version.h"
+#include "subprocess.h"
 
 using namespace std;
 
@@ -50,7 +52,7 @@ namespace {
 struct DryRunCommandRunner : public CommandRunner {
   // Overridden from CommandRunner:
   size_t CanRunMore() const override;
-  bool StartCommand(Edge* edge) override;
+  bool StartCommand(Edge* edge, int version) override;
   bool WaitForCommand(Result* result) override;
 
  private:
@@ -61,7 +63,7 @@ size_t DryRunCommandRunner::CanRunMore() const {
   return SIZE_MAX;
 }
 
-bool DryRunCommandRunner::StartCommand(Edge* edge) {
+bool DryRunCommandRunner::StartCommand(Edge* edge, int version) {
   finished_.push(edge);
   return true;
 }
@@ -304,8 +306,8 @@ bool Plan::CleanNode(DependencyScan* scan, Node* node, string* err) {
       // If the edge isn't dirty, clean the outputs and mark the edge as not
       // wanted.
       bool outputs_dirty = false;
-      if (!scan->RecomputeOutputsDirty(*oe, most_recent_input,
-                                       &outputs_dirty, err)) {
+      if (!scan->RecomputeOutputsDirty(*oe, most_recent_input, &outputs_dirty,
+                                       err)) {
         return false;
       }
       if (!outputs_dirty) {
@@ -617,6 +619,21 @@ Builder::Builder(State* state, const BuildConfig& config, BuildLog* build_log,
   if (!build_dir.empty())
     lock_file_path_ = build_dir + "/" + lock_file_path_;
   status_->SetExplanations(explanations_.get());
+  if (state->minimum_version_ >= kFeatureVersion_ExtendedProcessLaunch) {
+    string environment =
+        state_->bindings_.LookupVariable("override_environment");
+    if (!environment.empty()) {
+      Subprocess::OverrideEnvironment(environment);
+      if (!state_->bindings_.LookupVariable("environment").empty())
+        Fatal(
+            "You cannot specify both 'override_environment'"
+            " and 'environment'");
+    } else {
+      environment = state_->bindings_.LookupVariable("environment");
+      if (!environment.empty())
+        Subprocess::AppendEnvironment(environment);
+    }
+  }
 }
 
 Builder::~Builder() {
@@ -866,8 +883,9 @@ bool Builder::StartEdge(Edge* edge, string* err) {
   }
 
   // start command computing and run it
-  if (!command_runner_->StartCommand(edge)) {
-    err->assign("command '" + edge->EvaluateCommand() + "' failed.");
+  if (!command_runner_->StartCommand(edge, state_->minimum_version_)) {
+    err->assign("command '" + edge->EvaluateCommand(state_->minimum_version_) +
+                "' failed.");
     return false;
   }
 
@@ -906,7 +924,8 @@ bool Builder::FinishCommand(CommandRunner::Result* result, string* err) {
   running_edges_.erase(it);
 
   status_->BuildEdgeFinished(edge, start_time_millis, end_time_millis,
-                             result->status, result->output);
+                             result->status, result->output,
+                             state_->minimum_version_);
 
   // The rest of this function only applies to successful commands.
   if (!result->success()) {
@@ -959,7 +978,8 @@ bool Builder::FinishCommand(CommandRunner::Result* result, string* err) {
 
   if (scan_.build_log()) {
     if (!scan_.build_log()->RecordCommand(
-            edge, static_cast<int>(start_time_millis),
+            edge, state_->minimum_version_, 
+            static_cast<int>(start_time_millis),
             static_cast<int>(end_time_millis), record_mtime)) {
       *err = string("Error writing to build log: ") + strerror(errno);
       return false;

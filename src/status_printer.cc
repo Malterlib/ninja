@@ -176,7 +176,7 @@ void StatusPrinter::RecalculateProgressPrediction() {
 
 void StatusPrinter::BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
                                       int64_t end_time_millis, ExitStatus exit_code,
-                                      const string& output) {
+                                      const string& output, int version) {
   time_millis_ = end_time_millis;
   ++finished_edges_;
 
@@ -215,7 +215,7 @@ void StatusPrinter::BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
     } else {
         printer_.PrintOnNewLine(failed + outputs + "\n");
     }
-    printer_.PrintOnNewLine(edge->EvaluateCommand() + "\n");
+    printer_.PrintOnNewLine(edge->EvaluateCommand(version) + "\n");
   }
 
   if (!output.empty()) {
