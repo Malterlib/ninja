@@ -28,6 +28,7 @@
 #include "metrics.h"
 #include "state.h"
 #include "util.h"
+#include "version.h"
 
 using namespace std;
 
@@ -267,10 +268,11 @@ bool DependencyScan::VerifyDAG(Node* node, vector<Node*>* stack, string* err) {
 
 bool DependencyScan::RecomputeOutputsDirty(Edge* edge, Node* most_recent_input,
                                            bool* outputs_dirty, string* err) {
-  string command = edge->EvaluateCommand(/*incl_rsp_file=*/true);
+  SubprocessArguments args;
+  edge->EvaluateCommand(args, state_->minimum_version_, /*incl_rsp_file=*/true);
   for (vector<Node*>::iterator o = edge->outputs_.begin();
        o != edge->outputs_.end(); ++o) {
-    if (RecomputeOutputDirty(edge, most_recent_input, command, *o)) {
+    if (RecomputeOutputDirty(edge, most_recent_input, args, *o)) {
       *outputs_dirty = true;
       return true;
     }
@@ -280,7 +282,7 @@ bool DependencyScan::RecomputeOutputsDirty(Edge* edge, Node* most_recent_input,
 
 bool DependencyScan::RecomputeOutputDirty(const Edge* edge,
                                           const Node* most_recent_input,
-                                          const string& command,
+                                          const SubprocessArguments& args,
                                           Node* output) {
   if (edge->is_phony()) {
     // Phony edges don't write any output.  Outputs are only dirty if
@@ -338,7 +340,7 @@ bool DependencyScan::RecomputeOutputDirty(const Edge* edge,
     bool generator = edge->GetBindingBool("generator");
     if (entry || (entry = build_log()->LookupByOutput(output->path()))) {
       if (!generator &&
-          BuildLog::LogEntry::HashCommand(command) != entry->command_hash) {
+          BuildLog::LogEntry::HashCommand(args) != entry->command_hash) {
         // May also be dirty due to the command changing since the last build.
         // But if this is a generator rule, the command changing does not make us
         // dirty.
@@ -392,7 +394,7 @@ bool Edge::AllInputsReady() const {
 
 /// An Env for an Edge, providing $in and $out.
 struct EdgeEnv : public Env {
-  enum EscapeKind { kShellEscape, kDoNotEscape };
+  enum EscapeKind { kShellEscape, kRawEscape, kDoNotEscape };
 
   EdgeEnv(const Edge* const edge, const EscapeKind escape)
       : edge_(edge), escape_in_out_(escape), recursive_(false) {}
@@ -494,6 +496,8 @@ std::string EdgeEnv::MakePathList(const Node* const* const span,
 #else
       GetShellEscapedString(path, &result);
 #endif
+    } else if (escape_in_out_ == kRawEscape) {
+      GetRawEscapedString(path, &result);
     } else {
       result.append(path);
     }
@@ -501,23 +505,58 @@ std::string EdgeEnv::MakePathList(const Node* const* const span,
   return result;
 }
 
-std::string Edge::EvaluateCommand(const bool incl_rsp_file) const {
-  string command = GetBinding("command");
+void Edge::EvaluateCommand(SubprocessArguments& args, int version,
+                           bool incl_rsp_file) const {
+  if (version >= kFeatureVersion_ExtendedProcessLaunch) {
+    bool use_raw = GetBindingBool("command_raw");
+    args.command_raw_ = use_raw;
+    args.command_ = GetBinding("command", use_raw);
+    args.environment_ = GetBinding("environment", true);
+    args.command_cwd_ = GetUnescapedBinding("command_cwd");
+  } else {
+    args.command_ = GetBinding("command", false);
+  }
+
   if (incl_rsp_file) {
-    string rspfile_content = GetBinding("rspfile_content");
+    string rspfile_content = GetBinding("rspfile_content", true);
+    if (!rspfile_content.empty())
+      args.command_ += ";rspfile=" + rspfile_content;
+  }
+}
+
+std::string Edge::EvaluateCommand(int version, const bool incl_rsp_file) const {
+  bool use_raw = false;
+  if (version >= kFeatureVersion_ExtendedProcessLaunch) {
+    use_raw = GetBindingBool("command_raw");
+  }
+
+  std::string command = GetBinding("command", use_raw);
+
+  if (incl_rsp_file) {
+    string rspfile_content = GetBinding("rspfile_content", true);
     if (!rspfile_content.empty())
       command += ";rspfile=" + rspfile_content;
   }
   return command;
 }
 
-std::string Edge::GetBinding(const std::string& key) const {
-  EdgeEnv env(this, EdgeEnv::kShellEscape);
+std::string Edge::GetUnescapedBinding(const std::string& key) const {
+  EdgeEnv env(this, EdgeEnv::kDoNotEscape);
   return env.LookupVariable(key);
 }
 
+std::string Edge::GetBinding(const std::string& key, bool raw_escape) const {
+  if (raw_escape) {
+    EdgeEnv env(this, EdgeEnv::kRawEscape);
+    return env.LookupVariable(key);
+  } else {
+    EdgeEnv env(this, EdgeEnv::kShellEscape);
+    return env.LookupVariable(key);
+  }
+}
+
 bool Edge::GetBindingBool(const string& key) const {
-  return !GetBinding(key).empty();
+  return !GetUnescapedBinding(key).empty();
 }
 
 string Edge::GetUnescapedDepfile() const {
@@ -619,7 +658,7 @@ void Node::Dump(const char* prefix) const {
 }
 
 bool ImplicitDepLoader::LoadDeps(Edge* edge, string* err) {
-  string deps_type = edge->GetBinding("deps");
+  string deps_type = edge->GetUnescapedBinding("deps");
   if (!deps_type.empty())
     return LoadDepsFromLog(edge, err);
 

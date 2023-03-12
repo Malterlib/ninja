@@ -71,6 +71,7 @@ void CanonicalizePath(char* path, size_t* len, uint64_t* slash_bits);
 /// Appends the string directly to |result| without modification if we can
 /// determine that it contains no problematic characters.
 void GetShellEscapedString(const std::string& input, std::string* result);
+void GetRawEscapedString(const std::string& input, std::string* result);
 void GetWin32EscapedString(const std::string& input, std::string* result);
 
 /// Read a file to a string (in text mode: with CRLF conversion

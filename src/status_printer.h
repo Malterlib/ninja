@@ -33,7 +33,8 @@ struct StatusPrinter : Status {
   void BuildEdgeStarted(const Edge* edge, int64_t start_time_millis) override;
   void BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
                                  int64_t end_time_millis, ExitStatus exit_code,
-                                 const std::string& output) override;
+                                 const std::string& output,
+                                 int version) override;
   void BuildStarted() override;
   void BuildFinished() override;
 

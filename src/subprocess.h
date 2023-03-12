@@ -34,6 +34,7 @@
 #endif
 
 #include "exit_status.h"
+#include "subprocess_arguments.h"
 
 /// Subprocess wraps a single async subprocess.  It is entirely
 /// passive: it expects the caller to notify it when its fds are ready
@@ -50,9 +51,12 @@ struct Subprocess {
 
   const std::string& GetOutput() const;
 
+  static void OverrideEnvironment(const std::string& environment);
+  static void AppendEnvironment(const std::string& environment);
+
  private:
-  Subprocess(bool use_console);
-  bool Start(struct SubprocessSet* set, const std::string& command);
+  Subprocess(SubprocessArguments&& args);
+  bool Start(struct SubprocessSet* set);
   void OnPipeReady();
 
   std::string buf_;
@@ -90,7 +94,7 @@ struct Subprocess {
   /// Return a boolean indicating whether the subprocess has indeed terminated.
   bool TryFinish(int waitpid_options);
 #endif
-  bool use_console_;
+  SubprocessArguments args_;
 
   friend struct SubprocessSet;
 };
@@ -102,7 +106,7 @@ struct SubprocessSet {
   SubprocessSet();
   ~SubprocessSet();
 
-  Subprocess* Add(const std::string& command, bool use_console = false);
+  Subprocess* Add(SubprocessArguments&& args);
   bool DoWork();
   Subprocess* NextFinished();
   void Clear();

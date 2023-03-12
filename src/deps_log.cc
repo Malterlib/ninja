@@ -373,7 +373,7 @@ bool DepsLog::IsDepsEntryLiveFor(const Node* node) {
   // entries are no longer needed.
   // (Without the check for "deps", a chain of two or more nodes that each
   // had deps wouldn't be collected in a single recompaction.)
-  return node->in_edge() && !node->in_edge()->GetBinding("deps").empty();
+  return node->in_edge() && !node->in_edge()->GetUnescapedBinding("deps").empty();
 }
 
 bool DepsLog::UpdateDeps(int out_id, Deps* deps) {
