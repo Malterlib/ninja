@@ -26,6 +26,7 @@
 #include "eval_env.h"
 #include "explanations.h"
 #include "jobserver.h"
+#include "subprocess_arguments.h"
 #include "timestamp.h"
 #include "util.h"
 
@@ -193,10 +194,15 @@ struct Edge {
   /// Expand all variables in a command and return it as a string.
   /// If incl_rsp_file is enabled, the string will also contain the
   /// full contents of a response file (if applicable)
-  std::string EvaluateCommand(bool incl_rsp_file = false) const;
+  std::string EvaluateCommand(int version = 0,
+                              bool incl_rsp_file = false) const;
+
+  void EvaluateCommand(SubprocessArguments& args, int version,
+                       bool incl_rsp_file = false) const;
 
   /// Returns the shell-escaped value of |key|.
-  std::string GetBinding(StringPiece key) const;
+  std::string GetBinding(StringPiece key, bool raw_escape) const;
+  std::string GetUnescapedBinding(StringPiece key) const;
   bool GetBindingBool(StringPiece key) const;
 
   /// Like GetBinding("depfile"), but without shell escaping.
@@ -380,7 +386,7 @@ struct DependencyScan {
                  DiskInterface* disk_interface,
                  DepfileParserOptions const* depfile_parser_options,
                  Explanations* explanations)
-      : build_log_(build_log), disk_interface_(disk_interface),
+      : state_(state), build_log_(build_log), disk_interface_(disk_interface),
         dep_loader_(state, deps_log, disk_interface, depfile_parser_options,
                     explanations),
         dyndep_loader_(state, disk_interface, explanations),
@@ -431,6 +437,7 @@ struct DependencyScan {
 
   void RecordExplanation(const Node* node, const char* fmt, ...);
 
+  State* state_;
   BuildLog* build_log_;
   DiskInterface* disk_interface_;
   ImplicitDepLoader dep_loader_;

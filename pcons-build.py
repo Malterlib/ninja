@@ -178,6 +178,7 @@ core_sources = [
         "manifest_parser",
         "metrics",
         "missing_deps",
+        "null_terminated_string_array",
         "parser",
         "real_command_runner",
         "state",
@@ -219,6 +220,10 @@ if aix:
     # perfstat_cpu_total(), used by GetLoadAverage(). Public: it is the
     # linked binaries that need it, not libninja's own compiles.
     libninja.public.link_libs.append("perfstat")
+if sys.platform == "linux":
+    # dlsym(), which the subprocess launcher only uses on Linux. Not every
+    # other system has a libdl.
+    libninja.public.link_libs.append("dl")
 
 # --- the ninja binary -------------------------------------------------------
 
