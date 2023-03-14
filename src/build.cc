@@ -883,7 +883,8 @@ bool Builder::StartEdge(Edge* edge, string* err) {
     return true;
 
   int64_t start_time_millis = GetTimeMillis() - start_time_millis_;
-  running_edges_.insert(make_pair(edge, start_time_millis));
+  running_edges_.insert(
+      make_pair(const_cast<const Edge*>(edge), int(start_time_millis)));
 
   status_->BuildEdgeStarted(edge, start_time_millis);
 
