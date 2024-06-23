@@ -37,7 +37,7 @@ int64_t HighResTimer() {
       .count();
 }
 
-constexpr int64_t GetFrequency() {
+[[maybe_unused]] constexpr int64_t GetFrequency() {
   // If numerator isn't 1 then we lose precision and that will need to be
   // assessed.
   static_assert(std::chrono::steady_clock::period::num == 1,
