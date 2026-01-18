@@ -280,6 +280,7 @@ void Usage(const BuildConfig& config) {
 "  --quiet        don't show progress status, just command output\n"
 "  --status FMT   progress status format using Ninja-style $vars\n"
 "                 (e.g. --status '[$finished/$total] ')\n"
+"  --quiet-success  suppress command output on success\n"
 "\n"
 "  -C DIR   change to DIR before doing anything else\n"
 "  -f FILE  specify input build file [default=build.ninja]\n"
@@ -1852,6 +1853,7 @@ int ReadFlags(int* argc, char*** argv,
     OPT_QUIET = 2,
     OPT_STATUS = 3,
     OPT_JOBSERVER_POOL = 4,
+    OPT_QUIET_SUCCESS = 5,
   };
   const option kLongOptions[] = {
     { "help", no_argument, NULL, 'h' },
@@ -1860,6 +1862,7 @@ int ReadFlags(int* argc, char*** argv,
     { "quiet", no_argument, NULL, OPT_QUIET },
     { "status", required_argument, NULL, OPT_STATUS },
     { "jobserver-pool", no_argument, NULL, OPT_JOBSERVER_POOL },
+    { "quiet-success", no_argument, NULL, OPT_QUIET_SUCCESS },
     { NULL, 0, NULL, 0 }
   };
 
@@ -1926,6 +1929,9 @@ int ReadFlags(int* argc, char*** argv,
         break;
       case OPT_STATUS:
         config->progress_status_format = optarg;
+        break;
+      case OPT_QUIET_SUCCESS:
+        config->quiet_success = true;
         break;
       case 'w':
         if (!WarningEnable(optarg, options))
