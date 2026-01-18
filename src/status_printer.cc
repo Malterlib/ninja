@@ -218,7 +218,12 @@ void StatusPrinter::BuildEdgeFinished(Edge* edge, int64_t start_time_millis,
     printer_.PrintOnNewLine(edge->EvaluateCommand(version) + "\n");
   }
 
-  if (!output.empty()) {
+  // Suppress output on success if --quiet-success flag is set
+  // (unless verbose mode is active, which overrides quiet-success)
+  bool suppress_output = (exit_code == ExitSuccess) && config_.quiet_success &&
+                         config_.verbosity != BuildConfig::VERBOSE;
+
+  if (!output.empty() && !suppress_output) {
 #ifdef _WIN32
     // Fix extra CR being added on Windows, writing out CR CR LF (#773)
     fflush(stdout);  // Begin Windows extra CR fix
