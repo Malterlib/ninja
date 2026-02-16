@@ -1061,6 +1061,28 @@ keys.
 `out`:: the space-separated list of files provided as outputs to the build line
   referencing this `rule`, shell-quoted if it appears in commands.
 
+`build_priority`:: if present, provides a weight hint (in milliseconds)
+  used by the critical path scheduler when prioritizing edges.  Ninja
+  uses the greater of `build_priority` and the historical build time
+  from `.ninja_log`.  When no historical data exists, `build_priority`
+  is used instead of the default weight of 1.  Higher values cause the
+  edge to be scheduled earlier.  This is useful for build system
+  generators that know certain steps (e.g. linking) are expensive.
+  Can be set on a rule (as a default for all edges using that rule) or
+  on individual build statements (to override the rule default).
++
+Use it like in the following example:
++
+----
+rule link
+  command = ld -o $out $in
+  build_priority = 5000
+
+# Override rule default for a particularly expensive link
+build myapp: link obj1.o obj2.o
+  build_priority = 10000
+----
+
 `restat`:: if present, causes Ninja to re-stat the command's outputs
   after execution of the command.  Each output whose modification time
   the command did not change will be treated as though it had never

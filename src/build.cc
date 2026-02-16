@@ -468,9 +468,20 @@ void Plan::UnmarkDependents(const Node* node, set<Node*>* dependents) {
 namespace {
 
 // Heuristic for edge priority weighting.
-// Phony edges are free (0 cost), all other edges are weighted equally.
+// Phony edges are free (0 cost), other edges use the greater of historical
+// build time and user-defined build_priority, defaulting to 1.
 int64_t EdgeWeightHeuristic(Edge *edge) {
-  return edge->is_phony() ? 0 : 1;
+  if (edge->is_phony())
+    return 0;
+  int64_t weight = edge->prev_elapsed_time_millis < 0 ? 1
+                                                       : edge->prev_elapsed_time_millis;
+  auto priority_str = edge->GetUnescapedBinding("build_priority");
+  if (!priority_str.empty()) {
+    int64_t priority = strtoll(priority_str.c_str(), nullptr, 10);
+    if (priority > weight)
+      weight = priority;
+  }
+  return weight;
 }
 
 }  // namespace

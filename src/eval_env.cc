@@ -83,7 +83,8 @@ bool Rule::IsReservedBinding(const string& var, int version) {
       return true;
   }
 
-  return var == "command" ||
+  return var == "build_priority" ||
+      var == "command" ||
       var == "depfile" ||
       var == "dyndep" ||
       var == "description" ||
