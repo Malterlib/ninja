@@ -144,20 +144,26 @@ static std::wstring NormalizeArguments(NullTerminatedStringArray& parsed_args,
       while (*parse) {
         wchar_t character = *parse;
         if (character == '\"') {
-          for (size_t i = 0; i < backslashes; ++i)
+          // 2N+1 backslashes + " ==> N backslashes + literal "
+          for (size_t i = 0; i < backslashes * 2 + 1; ++i)
             return_string.push_back('\\');
-          return_string += L"\\\"";
+          return_string.push_back('"');
           backslashes = 0;
         } else if (character == '\\')
           ++backslashes;
         else {
+          // N backslashes followed by a non-quote char are literal
+          for (size_t i = 0; i < backslashes; ++i)
+            return_string.push_back('\\');
           backslashes = 0;
           return_string.push_back(character);
         }
         ++parse;
       }
 
-      for (size_t i = 0; i < backslashes; ++i)
+      // Trailing backslashes before the closing quote must be doubled so they
+      // round-trip as N literal backslashes (2N backslashes + " ==> N + quote).
+      for (size_t i = 0; i < backslashes * 2; ++i)
         return_string.push_back('\\');
 
       return_string += L"\"";
