@@ -29,9 +29,13 @@
 #include <windows.h>
 #elif defined(_AIX)
 #include "getopt_local.h"
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 #else
+#include <fcntl.h>
 #include <getopt.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
 
@@ -154,6 +158,15 @@ struct NinjaMain : public BuildLogUser {
   /// Ensure the build directory exists, creating it if necessary.
   /// @return false on error.
   bool EnsureBuildDirExists();
+
+  /// Take an exclusive lock on the build directory for the life of the
+  /// process, so no second ninja runs in it: two processes appending to
+  /// .ninja_log and .ninja_deps corrupt them, and the recovery on the next
+  /// load then rebuilds everything. A held lock fails instead of waiting.
+  /// The lock belongs to the process rather than to this instance: a manifest
+  /// reload constructs a new NinjaMain and keeps the lock it already holds.
+  /// @return false when another process holds the lock or it cannot be taken.
+  bool LockBuildDir();
 
   /// Rebuild the manifest, if necessary.
   /// Fills in \a err on error.
@@ -1547,6 +1560,102 @@ void NinjaMain::DumpMetrics() {
          count / (double) buckets, count, buckets);
 }
 
+namespace {
+
+// The build lock of this process. real_main constructs a NinjaMain per manifest
+// reload, so the lock lives here rather than in the instance: a reload that
+// stays in the same build directory keeps the lock it holds instead of failing
+// against its own earlier one, and a reload that moved the build directory
+// releases it and takes a new one. Released when the process exits.
+struct BuildDirLock {
+#ifdef _WIN32
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  bool Held() const { return handle != INVALID_HANDLE_VALUE; }
+  void Release() {
+    if (Held())
+      CloseHandle(handle);
+    handle = INVALID_HANDLE_VALUE;
+    path.clear();
+  }
+#else
+  int fd = -1;
+  bool Held() const { return fd >= 0; }
+  void Release() {
+    if (Held())
+      close(fd);
+    fd = -1;
+    path.clear();
+  }
+#endif
+  string path;
+};
+
+BuildDirLock g_build_dir_lock;
+
+}  // namespace
+
+bool NinjaMain::LockBuildDir() {
+  string path = ".ninja_build_lock";
+  if (!build_dir_.empty())
+    path = build_dir_ + "/" + path;
+  const char* dir = build_dir_.empty() ? "." : build_dir_.c_str();
+
+  if (g_build_dir_lock.Held()) {
+    if (g_build_dir_lock.path == path)
+      return true;
+    g_build_dir_lock.Release();
+  }
+
+#ifdef _WIN32
+  // No sharing at all: a second open fails with a sharing violation while
+  // this handle is open, and the file goes away with the last handle.
+  HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                              NULL, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
+                              NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    DWORD last_error = GetLastError();
+    if (last_error == ERROR_SHARING_VIOLATION) {
+      Error("another ninja is already building in '%s' (it holds %s); a "
+            "second build in one build directory corrupts its build and "
+            "dependency logs, so this one stops here",
+            dir, path.c_str());
+      return false;
+    }
+    if (last_error == ERROR_PATH_NOT_FOUND && config_.dry_run)
+      return true;
+    Error("taking the build lock %s: %s", path.c_str(),
+          GetLastErrorString().c_str());
+    return false;
+  }
+  g_build_dir_lock.handle = handle;
+#else
+  int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+  if (fd < 0) {
+    if (errno == ENOENT && config_.dry_run)
+      return true;
+    Error("taking the build lock %s: %s", path.c_str(), strerror(errno));
+    return false;
+  }
+  if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+    int lock_errno = errno;
+    close(fd);
+    if (lock_errno == EWOULDBLOCK) {
+      Error("another ninja is already building in '%s' (it holds %s); a "
+            "second build in one build directory corrupts its build and "
+            "dependency logs, so this one stops here",
+            dir, path.c_str());
+      return false;
+    }
+    Error("taking the build lock %s: %s", path.c_str(), strerror(lock_errno));
+    return false;
+  }
+  g_build_dir_lock.fd = fd;
+#endif
+  g_build_dir_lock.path = path;
+  return true;
+}
+
 bool NinjaMain::EnsureBuildDirExists() {
   build_dir_ = state_.bindings_.LookupVariable("builddir");
   if (!build_dir_.empty() && !config_.dry_run) {
@@ -1857,6 +1966,10 @@ NORETURN void real_main(int argc, char** argv) {
       exit((ninja.*options.tool->func)(&options, argc, argv));
 
     if (!ninja.EnsureBuildDirExists())
+      exit(1);
+
+    // Before the logs are opened: loading them already rewrites them.
+    if (!ninja.LockBuildDir())
       exit(1);
 
     if (!ninja.OpenBuildLog() || !ninja.OpenDepsLog())
