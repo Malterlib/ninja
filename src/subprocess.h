@@ -51,7 +51,11 @@ struct Subprocess {
 
   const std::string& GetOutput() const;
 
-  static void OverrideEnvironment(const std::string& environment);
+  /// \a unhashed are lines of an environment, as of \a environment, that
+  /// the subprocesses get too without changing command hashes.
+  static void OverrideEnvironment(const std::string& environment,
+                                  const std::string& unhashed =
+                                      std::string());
   static void AppendEnvironment(const std::string& environment);
 
  private:

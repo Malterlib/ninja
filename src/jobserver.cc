@@ -16,6 +16,8 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <vector>
 
@@ -181,6 +183,42 @@ bool Jobserver::ParseMakeFlagsValue(const char* makeflags_env,
   }
 
   return true;
+}
+
+std::string Jobserver::JobserverEnvironmentLine() {
+  const char* makeflags = getenv("MAKEFLAGS");
+  if (!makeflags)
+    return std::string();
+  Config config;
+  std::string error;
+  if (!ParseNativeMakeFlagsValue(makeflags, &config, &error) ||
+      !config.HasMode())
+    return std::string();
+
+  // A leading space, as make writes it when it has no flag letters
+  std::string line = "MAKEFLAGS=";
+  for (const char* p = makeflags; *p;) {
+    p += strspn(p, " \t");
+    size_t length = strcspn(p, " \t");
+    if (!length)
+      break;
+    const char* word = p;
+    p += length;
+    // The variables that make passes come after --
+    if (length == 2 && word[0] == '-' && word[1] == '-')
+      break;
+    // A word ends at a space or the end, where these comparisons stop
+    if (strncmp(word, "-j", 2) != 0 && strncmp(word, "--jobs", 6) != 0)
+      continue;
+    // The value of a line of an environment escapes backslashes
+    line += ' ';
+    for (const char* character = word; character != p; ++character) {
+      if (*character == '\\')
+        line += '\\';
+      line += *character;
+    }
+  }
+  return line;
 }
 
 bool Jobserver::ParseNativeMakeFlagsValue(const char* makeflags_env,

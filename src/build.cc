@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <functional>
 #include <unordered_set>
@@ -46,7 +47,56 @@
 
 using namespace std;
 
+const char kBuildLockChainVariable[] = "NINJA_BUILD_LOCK_CHAIN";
+
 namespace {
+
+/// Whether the variable \a name is the one \a length characters long at
+/// \a listed. Windows compares the names of variables without case, and they
+/// are ASCII in practice.
+bool IsVariableName(const char* listed, size_t length, const char* name) {
+  for (size_t i = 0; i < length; ++i) {
+    char listed_character = listed[i];
+    char name_character = name[i];
+    if (!name_character)
+      return false;
+#ifdef _WIN32
+    if (listed_character >= 'a' && listed_character <= 'z')
+      listed_character = static_cast<char>(listed_character - 'a' + 'A');
+    if (name_character >= 'a' && name_character <= 'z')
+      name_character = static_cast<char>(name_character - 'a' + 'A');
+#endif
+    if (listed_character != name_character)
+      return false;
+  }
+  return !name[length];
+}
+
+/// The variables of \a names that an environment block sets or copies, in one
+/// pass over the block: bit i is set for names[i].
+unsigned ListedEnvironmentVariables(const string& environment,
+                                    const char* const* names, size_t count) {
+  unsigned listed = 0;
+  const char* data = environment.data();
+  for (size_t start = 0; start < environment.size();) {
+    // A line copies a variable by its name or sets it with name=value
+    size_t name_end = environment.find_first_of("=\n", start);
+    if (name_end == string::npos)
+      name_end = environment.size();
+    size_t end = name_end;
+    if (end < environment.size() && data[end] == '=') {
+      end = environment.find('\n', end);
+      if (end == string::npos)
+        end = environment.size();
+    }
+    for (size_t i = 0; i < count; ++i) {
+      if (IsVariableName(data + start, name_end - start, names[i]))
+        listed |= 1u << i;
+    }
+    start = end + 1;
+  }
+  return listed;
+}
 
 /// A CommandRunner that doesn't actually run the commands.
 struct DryRunCommandRunner : public CommandRunner {
@@ -637,7 +687,14 @@ Builder::Builder(State* state, const BuildConfig& config, BuildLog* build_log,
     string environment =
         state_->bindings_.LookupVariable("override_environment");
     if (!environment.empty()) {
-      Subprocess::OverrideEnvironment(environment);
+      // The builds that a command runs need the chain of build locks, whatever
+      // the manifest copies from the environment of ninja
+      const char* const lock_chain_name = kBuildLockChainVariable;
+      Subprocess::OverrideEnvironment(
+          environment,
+          ListedEnvironmentVariables(environment, &lock_chain_name, 1)
+              ? string()
+              : string(kBuildLockChainVariable));
       if (!state_->bindings_.LookupVariable("environment").empty())
         Fatal(
             "You cannot specify both 'override_environment'"
@@ -648,6 +705,32 @@ Builder::Builder(State* state, const BuildConfig& config, BuildLog* build_log,
         Subprocess::AppendEnvironment(environment);
     }
   }
+}
+
+void Builder::SetJobserverClient(
+    std::unique_ptr<Jobserver::Client> jobserver_client) {
+  jobserver_ = std::move(jobserver_client);
+  if (!jobserver_ ||
+      state_->minimum_version_ < kFeatureVersion_ExtendedProcessLaunch)
+    return;
+  string jobserver_line = Jobserver::JobserverEnvironmentLine();
+  if (jobserver_line.empty())
+    return;
+  // The block of the manifest gets the options of the jobserver unhashed, as
+  // the chain of build locks, unless it copies or sets MAKEFLAGS itself
+  string environment = state_->bindings_.LookupVariable("override_environment");
+  if (environment.empty())
+    return;
+  const char* const unhashed_names[] = { kBuildLockChainVariable,
+                                         "MAKEFLAGS" };
+  unsigned listed = ListedEnvironmentVariables(environment, unhashed_names, 2);
+  if (listed & 2)
+    return;
+  string unhashed;
+  if (!(listed & 1))
+    unhashed = string(kBuildLockChainVariable) + '\n';
+  unhashed += jobserver_line;
+  Subprocess::OverrideEnvironment(environment, unhashed);
 }
 
 Builder::~Builder() {
