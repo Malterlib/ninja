@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 
 #ifdef _WIN32
@@ -160,9 +161,10 @@ struct NinjaMain : public BuildLogUser {
   bool EnsureBuildDirExists();
 
   /// Take a process-wide, nonblocking build-directory lock to protect the logs.
-  /// The lock survives manifest reloads.
+  /// The lock survives manifest reloads. Sets \a waited when it waited for
+  /// another ninja to release the lock.
   /// @return false if the lock is held by another process or cannot be taken.
-  bool LockBuildDir();
+  bool LockBuildDir(bool* waited);
 
   /// Rebuild the manifest, if necessary.
   /// Fills in \a err on error.
@@ -244,6 +246,10 @@ void Usage(const BuildConfig& config) {
 "  -v, --verbose  show all command lines while building\n"
 "  --quiet        don't show progress status, just command output\n"
 "  --quiet-success  suppress command output on success\n"
+"  --wait-for-lock  wait for another ninja building in the build directory to\n"
+"                   finish, instead of stopping\n"
+"  --lock-timeout SECONDS  stop waiting for the build directory after SECONDS;\n"
+"                   implies --wait-for-lock, unless negative for no limit\n"
 "\n"
 "  -C DIR   change to DIR before doing anything else\n"
 "  -f FILE  specify input build file [default=build.ninja]\n"
@@ -1585,9 +1591,154 @@ struct BuildDirLock {
 
 BuildDirLock g_build_dir_lock;
 
+/// The command line that ran this ninja, which the owner file of its build lock
+/// names for the builds that find the lock taken.
+string g_command_line;
+
+enum LockAttempt {
+  kLockTaken,
+  kLockHeld,
+  /// Windows denies opening the lock of a ninja that is exiting until its
+  /// handle closes, and also when the lock cannot be accessed at all.
+  kLockDenied,
+  /// A dry run in a build directory that does not exist yet needs no lock.
+  kLockNotNeeded,
+  kLockFailed,
+};
+
+LockAttempt TryLockBuildDir(const string& path, bool dry_run, string* err) {
+#ifdef _WIN32
+  // Deny sharing while the handle is open; delete the file on close.
+  HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                              NULL, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
+                              NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    DWORD last_error = GetLastError();
+    if (last_error == ERROR_SHARING_VIOLATION)
+      return kLockHeld;
+    if (last_error == ERROR_ACCESS_DENIED) {
+      *err = GetLastErrorString();
+      return kLockDenied;
+    }
+    if (last_error == ERROR_PATH_NOT_FOUND && dry_run)
+      return kLockNotNeeded;
+    *err = GetLastErrorString();
+    return kLockFailed;
+  }
+  g_build_dir_lock.handle = handle;
+#else
+  int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+  if (fd < 0) {
+    if (errno == ENOENT && dry_run)
+      return kLockNotNeeded;
+    *err = strerror(errno);
+    return kLockFailed;
+  }
+  if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+    int lock_errno = errno;
+    close(fd);
+    if (lock_errno == EWOULDBLOCK)
+      return kLockHeld;
+    *err = strerror(lock_errno);
+    return kLockFailed;
+  }
+  g_build_dir_lock.fd = fd;
+#endif
+  g_build_dir_lock.path = path;
+  return kLockTaken;
+}
+
+/// The owner file only informs the builds that find the lock taken: the lock
+/// itself decides who builds, and an owner that dies leaves its file behind.
+string BuildLockOwnerPath(const string& lock_path) {
+  return lock_path + ".owner";
+}
+
+void WriteBuildLockOwner(const string& lock_path) {
+  char time_text[64] = "";
+  time_t now = time(NULL);
+  if (struct tm* local = localtime(&now))
+    strftime(time_text, sizeof(time_text), "%Y-%m-%d %H:%M:%S", local);
+
+#ifdef _WIN32
+  unsigned long pid = GetCurrentProcessId();
+#else
+  unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+
+  char header[128];
+  snprintf(header, sizeof(header), "process %lu, since %s, ", pid, time_text);
+  string contents = header + g_command_line + "\n";
+
+  // Write a file of its own and rename it over the old one, so that a waiting
+  // build never reads a partly written owner.
+  string owner_path = BuildLockOwnerPath(lock_path);
+  string temp_path = owner_path + "." + std::to_string(pid);
+  string err;
+  bool written = false;
+  if (FILE* file = fopen(temp_path.c_str(), "wb")) {
+    written = fwrite(contents.data(), 1, contents.size(), file) ==
+              contents.size();
+    written = fclose(file) == 0 && written;
+  }
+  if (!written) {
+    err = strerror(errno);
+  } else {
+#ifdef _WIN32
+    if (!MoveFileExA(temp_path.c_str(), owner_path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING))
+      err = GetLastErrorString();
+#else
+    if (rename(temp_path.c_str(), owner_path.c_str()) != 0)
+      err = strerror(errno);
+#endif
+  }
+  if (!err.empty()) {
+    remove(temp_path.c_str());
+    Warning("writing the owner of the build lock to %s: %s", owner_path.c_str(),
+            err.c_str());
+  }
+}
+
+string ReadBuildLockOwner(const string& lock_path) {
+  string contents;
+#ifdef _WIN32
+  // Sharing deletion lets another ninja replace the file while this one reads
+  HANDLE file = CreateFileA(BuildLockOwnerPath(lock_path).c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE)
+    return "owner unknown";
+  char buffer[4096];
+  DWORD read_size = 0;
+  while (::ReadFile(file, buffer, sizeof(buffer), &read_size, NULL) &&
+         read_size > 0)
+    contents.append(buffer, read_size);
+  CloseHandle(file);
+#else
+  string err;
+  if (ReadFile(BuildLockOwnerPath(lock_path), &contents, &err) != 0)
+    return "owner unknown";
+#endif
+  while (!contents.empty() &&
+         (contents.back() == '\n' || contents.back() == '\r'))
+    contents.pop_back();
+  return contents.empty() ? "owner unknown" : contents;
+}
+
+void SleepMillis(int millis) {
+#ifdef _WIN32
+  Sleep(millis);
+#else
+  usleep(millis * 1000);
+#endif
+}
+
 }  // namespace
 
-bool NinjaMain::LockBuildDir() {
+bool NinjaMain::LockBuildDir(bool* waited) {
   string path = ".ninja_build_lock";
   if (!build_dir_.empty())
     path = build_dir_ + "/" + path;
@@ -1599,53 +1750,83 @@ bool NinjaMain::LockBuildDir() {
     g_build_dir_lock.Release();
   }
 
-#ifdef _WIN32
-  // Deny sharing while the handle is open; delete the file on close.
-  HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
-                              NULL, OPEN_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
-                              NULL);
-  if (handle == INVALID_HANDLE_VALUE) {
-    DWORD last_error = GetLastError();
-    if (last_error == ERROR_SHARING_VIOLATION) {
-      Error("another ninja is already building in '%s' (it holds %s); a "
+  bool wait = config_.wait_for_lock;
+
+  const int64_t kPollMillis = 200;
+  const int64_t kReportMillis = 60 * 1000;
+  int64_t start_millis = GetTimeMillis();
+  int64_t next_report_millis = start_millis;
+  bool reported = false;
+  // A ninja that is exiting closes its handle quickly, so a denial that lasts
+  // longer is a permission error
+  const int64_t kDeniedMillis = 10 * 1000;
+  int64_t denied_since_millis = -1;
+
+  for (;;) {
+    string err;
+    switch (TryLockBuildDir(path, config_.dry_run, &err)) {
+      case kLockTaken:
+        WriteBuildLockOwner(path);
+        return true;
+      case kLockNotNeeded:
+        return true;
+      case kLockFailed:
+        Error("taking the build lock %s: %s", path.c_str(), err.c_str());
+        return false;
+      case kLockDenied: {
+        int64_t now_millis = GetTimeMillis();
+        if (denied_since_millis < 0)
+          denied_since_millis = now_millis;
+        if (now_millis - denied_since_millis >= kDeniedMillis ||
+            (config_.lock_timeout >= 0 &&
+             now_millis - start_millis >= config_.lock_timeout * 1000)) {
+          Error("taking the build lock %s: %s", path.c_str(), err.c_str());
+          return false;
+        }
+        *waited = true;
+        SleepMillis(kPollMillis);
+        continue;
+      }
+      case kLockHeld:
+        denied_since_millis = -1;
+        break;
+    }
+
+    string owner = ReadBuildLockOwner(path);
+    if (!wait) {
+      Error("another ninja is already building in '%s' (%s; it holds %s); a "
             "second build in one build directory corrupts its build and "
-            "dependency logs, so this one stops here",
-            dir, path.c_str());
+            "dependency logs, so this one stops here. To wait for it to "
+            "finish instead, pass --wait-for-lock",
+            dir, owner.c_str(), path.c_str());
       return false;
     }
-    if (last_error == ERROR_PATH_NOT_FOUND && config_.dry_run)
-      return true;
-    Error("taking the build lock %s: %s", path.c_str(),
-          GetLastErrorString().c_str());
-    return false;
-  }
-  g_build_dir_lock.handle = handle;
-#else
-  int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
-  if (fd < 0) {
-    if (errno == ENOENT && config_.dry_run)
-      return true;
-    Error("taking the build lock %s: %s", path.c_str(), strerror(errno));
-    return false;
-  }
-  if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
-    int lock_errno = errno;
-    close(fd);
-    if (lock_errno == EWOULDBLOCK) {
-      Error("another ninja is already building in '%s' (it holds %s); a "
-            "second build in one build directory corrupts its build and "
-            "dependency logs, so this one stops here",
-            dir, path.c_str());
+
+    *waited = true;
+    int64_t now_millis = GetTimeMillis();
+    int64_t waited_seconds = (now_millis - start_millis) / 1000;
+    if (config_.lock_timeout >= 0 &&
+        now_millis - start_millis >= config_.lock_timeout * 1000) {
+      Error("gave up after waiting %" PRId64 " seconds for the build in '%s' "
+            "(%s) to finish",
+            waited_seconds, dir, owner.c_str());
       return false;
     }
-    Error("taking the build lock %s: %s", path.c_str(), strerror(lock_errno));
-    return false;
+
+    if (now_millis >= next_report_millis) {
+      if (!reported)
+        Info("waiting for the build in '%s' (%s) to finish", dir,
+             owner.c_str());
+      else
+        Info("still waiting for the build in '%s' (%s) to finish, after %"
+             PRId64 " seconds", dir, owner.c_str(), waited_seconds);
+      fflush(stdout);
+      reported = true;
+      next_report_millis = now_millis + kReportMillis;
+    }
+
+    SleepMillis(kPollMillis);
   }
-  g_build_dir_lock.fd = fd;
-#endif
-  g_build_dir_lock.path = path;
-  return true;
 }
 
 bool NinjaMain::EnsureBuildDirExists() {
@@ -1804,13 +1985,21 @@ int ReadFlags(int* argc, char*** argv,
               Options* options, BuildConfig* config) {
   DeferGuessParallelism deferGuessParallelism(config);
 
-  enum { OPT_VERSION = 1, OPT_QUIET = 2, OPT_QUIET_SUCCESS = 3 };
+  enum {
+    OPT_VERSION = 1,
+    OPT_QUIET = 2,
+    OPT_QUIET_SUCCESS = 3,
+    OPT_WAIT_FOR_LOCK = 4,
+    OPT_LOCK_TIMEOUT = 5
+  };
   const option kLongOptions[] = {
     { "help", no_argument, NULL, 'h' },
     { "version", no_argument, NULL, OPT_VERSION },
     { "verbose", no_argument, NULL, 'v' },
     { "quiet", no_argument, NULL, OPT_QUIET },
     { "quiet-success", no_argument, NULL, OPT_QUIET_SUCCESS },
+    { "wait-for-lock", no_argument, NULL, OPT_WAIT_FOR_LOCK },
+    { "lock-timeout", required_argument, NULL, OPT_LOCK_TIMEOUT },
     { NULL, 0, NULL, 0 }
   };
 
@@ -1879,6 +2068,20 @@ int ReadFlags(int* argc, char*** argv,
       case OPT_QUIET_SUCCESS:
         config->quiet_success = true;
         break;
+      case OPT_WAIT_FOR_LOCK:
+        config->wait_for_lock = true;
+        break;
+      case OPT_LOCK_TIMEOUT: {
+        char* end;
+        double value = strtod(optarg, &end);
+        if (end == optarg || *end != 0)
+          Fatal("invalid --lock-timeout parameter: seconds expected");
+        // A negative timeout sets no limit, and does not ask to wait on its own
+        config->lock_timeout = value;
+        if (value >= 0)
+          config->wait_for_lock = true;
+        break;
+      }
       case 'w':
         if (!WarningEnable(optarg, options))
           return 1;
@@ -1911,6 +2114,12 @@ NORETURN void real_main(int argc, char** argv) {
 
   setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
   const char* ninja_command = argv[0];
+
+  for (int i = 0; i < argc; ++i) {
+    if (i > 0)
+      g_command_line += ' ';
+    g_command_line += argv[i];
+  }
 
   int exit_code = ReadFlags(&argc, &argv, &options, &config);
   if (exit_code >= 0)
@@ -1961,8 +2170,14 @@ NORETURN void real_main(int argc, char** argv) {
       exit(1);
 
     // Lock before loading logs, which may rewrite them.
-    if (!ninja.LockBuildDir())
+    bool waited = false;
+    if (!ninja.LockBuildDir(&waited))
       exit(1);
+
+    // The build that held the lock may have regenerated the manifest, so load
+    // it again; the lock is kept.
+    if (waited)
+      continue;
 
     if (!ninja.OpenBuildLog() || !ninja.OpenDepsLog())
       exit(1);

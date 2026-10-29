@@ -192,6 +192,12 @@ struct BuildConfig {
   DepfileParserOptions depfile_parser_options;
   /// Suppress output for successful commands (--quiet-success).
   bool quiet_success = false;
+  /// Wait for another ninja to release the build directory instead of
+  /// stopping (--wait-for-lock).
+  bool wait_for_lock = false;
+  /// Seconds to wait for the build directory, or negative to wait without a
+  /// limit (--lock-timeout).
+  double lock_timeout = -1.0;
 };
 
 /// Builder wraps the build process: starting commands, updating status.
