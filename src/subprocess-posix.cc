@@ -69,11 +69,16 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
-void Subprocess::OverrideEnvironment(const std::string& environment) {
+void Subprocess::OverrideEnvironment(const std::string& environment,
+                                     const std::string& unhashed_copies) {
   overridden_environment = NullTerminatedStringArray();
 
+  std::string all_variables = environment;
+  if (!unhashed_copies.empty())
+    all_variables += "\n" + unhashed_copies;
+
   std::set<std::string> overridden_variables;
-  overridden_environment.AddEnvironment(environment, overridden_variables,
+  overridden_environment.AddEnvironment(all_variables, overridden_variables,
                                         environ);
   overridden_environment.GetPointerArray();
 

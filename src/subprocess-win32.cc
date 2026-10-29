@@ -55,11 +55,21 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
-void Subprocess::OverrideEnvironment(const std::string& environment) {
+void Subprocess::OverrideEnvironment(const std::string& environment,
+                                     const std::string& unhashed_copies) {
   overridden_environment = NullTerminatedStringArray();
 
+  // With main, the CRT builds the wide environment that the copies read on
+  // the first call that asks for it
+  if (!_wenviron)
+    _wgetenv(L"PATH");
+
+  std::string all_variables = environment;
+  if (!unhashed_copies.empty())
+    all_variables += "\n" + unhashed_copies;
+
   std::set<std::wstring> overridden_variables;
-  overridden_environment.AddEnvironment(Utf8ToWide(environment),
+  overridden_environment.AddEnvironment(Utf8ToWide(all_variables),
                                         overridden_variables, _wenviron);
   overridden_environment.GetPointerArray();
   overridden_environment.GetEnvironmentBlock();
