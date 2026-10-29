@@ -55,12 +55,26 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
-void Subprocess::OverrideEnvironment(const std::string& environment) {
+void Subprocess::OverrideEnvironment(const std::string& environment,
+                                     const std::string& unhashed) {
   overridden_environment = NullTerminatedStringArray();
 
+  // With main, the CRT builds the wide environment that the copies read on
+  // the first call that asks for it
+  if (!_wenviron)
+    _wgetenv(L"PATH");
+
+  // Manifests that list the unhashed variables themselves have none, so the
+  // block is only joined with them when there are any
   NullTerminatedStringArray::VariableSet overridden_variables;
-  overridden_environment.AddEnvironment(Utf8ToWide(environment),
-                                        overridden_variables, _wenviron);
+  if (unhashed.empty()) {
+    overridden_environment.AddEnvironment(Utf8ToWide(environment),
+                                          overridden_variables, _wenviron);
+  } else {
+    overridden_environment.AddEnvironment(
+        Utf8ToWide(environment + '\n' + unhashed), overridden_variables,
+        _wenviron);
+  }
   overridden_environment.GetPointerArray();
   overridden_environment.GetEnvironmentBlock();
 

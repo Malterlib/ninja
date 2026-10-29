@@ -170,6 +170,16 @@ struct Jobserver {
   static bool ParseNativeMakeFlagsValue(const char* makeflags_env,
                                         Config* config, std::string* error);
 
+  /// When the MAKEFLAGS of the environment of ninja has a jobserver for the
+  /// commands to take part in, of the pool that ninja runs or of the make or
+  /// ninja that runs ninja, MAKEFLAGS with only the options of the jobserver,
+  /// as a line of an environment that replaces the one of the commands
+  /// (NullTerminatedStringArray::AddEnvironment); otherwise empty. The other
+  /// options and the variables that make passes in MAKEFLAGS stay out, as they
+  /// can change what a command does. It reads the environment, so the builder
+  /// takes it once for a build.
+  static std::string JobserverEnvironmentLine();
+
   /// A Jobserver::Client instance models a client of an external GNU jobserver
   /// pool, which can be implemented as a Unix FIFO, or a Windows named
   /// semaphore. Usage is the following:

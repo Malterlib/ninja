@@ -69,12 +69,20 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
-void Subprocess::OverrideEnvironment(const std::string& environment) {
+void Subprocess::OverrideEnvironment(const std::string& environment,
+                                     const std::string& unhashed) {
   overridden_environment = NullTerminatedStringArray();
 
+  // Manifests that list the unhashed variables themselves have none, so the
+  // block is only joined with them when there are any
   NullTerminatedStringArray::VariableSet overridden_variables;
-  overridden_environment.AddEnvironment(environment, overridden_variables,
-                                        environ);
+  if (unhashed.empty()) {
+    overridden_environment.AddEnvironment(environment, overridden_variables,
+                                          environ);
+  } else {
+    overridden_environment.AddEnvironment(environment + '\n' + unhashed,
+                                          overridden_variables, environ);
+  }
   overridden_environment.GetPointerArray();
 
   BuildLog::LogEntry::GlobalEnvironmentHash(environment, true);
