@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -32,11 +33,13 @@
 #include "getopt_local.h"
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #else
 #include <fcntl.h>
 #include <getopt.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -1728,6 +1731,160 @@ string ReadBuildLockOwner(const string& lock_path) {
   return contents.empty() ? "owner unknown" : contents;
 }
 
+#ifdef _WIN32
+const char kBuildLockChainSeparator = ';';
+#else
+const char kBuildLockChainSeparator = ':';
+#endif
+
+/// Nesting deeper than this is a runaway, such as builds in build directories
+/// that are generated with new names; the build that would go deeper stops.
+const size_t kMaxBuildLockChain = 8;
+
+/// The separator can be part of a directory name, so entries escape it, and
+/// the escape character, as % and two hexadecimal digits.
+string EscapeBuildLockPath(const string& lock_path) {
+  string result;
+  for (char character : lock_path) {
+    if (character == '%' || character == kBuildLockChainSeparator) {
+      char escaped[4];
+      snprintf(escaped, sizeof(escaped), "%%%02X",
+               static_cast<unsigned char>(character));
+      result += escaped;
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
+
+string UnescapeBuildLockPath(const string& entry) {
+  string result;
+  for (size_t i = 0; i < entry.size(); ++i) {
+    if (entry[i] == '%' && i + 2 < entry.size() &&
+        isxdigit(static_cast<unsigned char>(entry[i + 1])) &&
+        isxdigit(static_cast<unsigned char>(entry[i + 2]))) {
+      result += static_cast<char>(
+          strtol(entry.substr(i + 1, 2).c_str(), NULL, 16));
+      i += 2;
+    } else {
+      result += entry[i];
+    }
+  }
+  return result;
+}
+
+vector<string> ParentBuildLockChain() {
+  static vector<string> chain = [] {
+    vector<string> result;
+    const char* value = getenv(kBuildLockChainVariable);
+    if (!value)
+      return result;
+    string entry;
+    for (const char* parse = value;; ++parse) {
+      if (*parse == kBuildLockChainSeparator || *parse == 0) {
+        if (!entry.empty())
+          result.push_back(UnescapeBuildLockPath(entry));
+        entry.clear();
+        if (*parse == 0)
+          break;
+      } else {
+        entry += *parse;
+      }
+    }
+    return result;
+  }();
+  return chain;
+}
+
+string JoinBuildLockChain(const vector<string>& chain, const char* separator) {
+  string result;
+  for (size_t i = 0; i < chain.size(); ++i) {
+    if (i > 0)
+      result += separator;
+    result += chain[i];
+  }
+  return result;
+}
+
+/// The lock path that identifies a build directory across processes, which
+/// can name it differently.
+string CanonicalBuildLockPath(const string& build_dir) {
+  const char* dir = build_dir.empty() ? "." : build_dir.c_str();
+#ifdef _WIN32
+  // Resolve junctions and symbolic links, as realpath does, so that every
+  // alias of a build directory names the same lock
+  string result;
+  HANDLE dir_handle = CreateFileA(dir, 0,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                      FILE_SHARE_DELETE,
+                                  NULL, OPEN_EXISTING,
+                                  FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (dir_handle != INVALID_HANDLE_VALUE) {
+    char final_path[4 * MAX_PATH];
+    DWORD length = GetFinalPathNameByHandleA(
+        dir_handle, final_path, sizeof(final_path), FILE_NAME_NORMALIZED);
+    if (length > 0 && length < sizeof(final_path)) {
+      result = final_path;
+      if (result.compare(0, 4, "\\\\?\\") == 0)
+        result = result.substr(4);
+    }
+    CloseHandle(dir_handle);
+  }
+  if (result.empty()) {
+    // Without the final path, as of a directory that cannot be opened, the
+    // case of the path is not known, so it is folded
+    char full_path[_MAX_PATH];
+    result = _fullpath(full_path, dir, _MAX_PATH) ? full_path : dir;
+    for (char& character : result) {
+      character =
+          static_cast<char>(tolower(static_cast<unsigned char>(character)));
+    }
+  }
+  for (char& character : result) {
+    if (character == '\\')
+      character = '/';
+  }
+#else
+  string result = dir;
+  if (char* real_path = realpath(dir, NULL)) {
+    result = real_path;
+    free(real_path);
+  }
+#endif
+  return result + "/.ninja_build_lock";
+}
+
+/// Whether two canonical lock paths are the lock of one build directory, which
+/// a case-insensitive file system can spell in several ways.
+bool IsSameBuildLock(const string& lock_path, const string& other_lock_path) {
+  if (lock_path == other_lock_path)
+    return true;
+#ifndef _WIN32
+  string dir = lock_path.substr(0, lock_path.rfind('/'));
+  string other_dir = other_lock_path.substr(0, other_lock_path.rfind('/'));
+  struct stat dir_stat, other_dir_stat;
+  if (stat(dir.c_str(), &dir_stat) == 0 &&
+      stat(other_dir.c_str(), &other_dir_stat) == 0)
+    return dir_stat.st_dev == other_dir_stat.st_dev &&
+           dir_stat.st_ino == other_dir_stat.st_ino;
+#endif
+  return false;
+}
+
+void SetBuildLockChain(const vector<string>& chain) {
+  vector<string> escaped_chain;
+  for (const string& lock_path : chain)
+    escaped_chain.push_back(EscapeBuildLockPath(lock_path));
+  string value(JoinBuildLockChain(
+      escaped_chain, string(1, kBuildLockChainSeparator).c_str()));
+#ifdef _WIN32
+  _putenv_s(kBuildLockChainVariable, value.c_str());
+#else
+  setenv(kBuildLockChainVariable, value.c_str(), 1);
+#endif
+}
+
 void SleepMillis(int millis) {
 #ifdef _WIN32
   Sleep(millis);
@@ -1750,7 +1907,36 @@ bool NinjaMain::LockBuildDir(bool* waited) {
     g_build_dir_lock.Release();
   }
 
-  bool wait = config_.wait_for_lock;
+  // A build that runs a build in a build directory that it or a build running
+  // it holds would wait for itself forever.
+  //
+  // Out of scope: cycles across separate builds, where build A holds X and
+  // waits for Y while build B holds Y and its child waits for X. They need a
+  // cycle in the graph of build directories, which is a configuration error
+  // that this check reports the first time a build goes all the way round it
+  // on its own, and --lock-timeout ends a wait that overlaps one.
+  vector<string> chain = ParentBuildLockChain();
+  string canonical_path = CanonicalBuildLockPath(build_dir_);
+  if (std::find_if(chain.begin(), chain.end(), [&](const string& held) {
+        return IsSameBuildLock(held, canonical_path);
+      }) != chain.end()) {
+    chain.push_back(canonical_path);
+    Error("the build in '%s' runs a build in its own build directory, which "
+          "would wait for itself forever: %s",
+          dir, JoinBuildLockChain(chain, " -> ").c_str());
+    return false;
+  }
+  if (chain.size() >= kMaxBuildLockChain) {
+    chain.push_back(canonical_path);
+    Error("the build in '%s' would nest builds more than %d deep: %s",
+          dir, static_cast<int>(kMaxBuildLockChain),
+          JoinBuildLockChain(chain, " -> ").c_str());
+    return false;
+  }
+
+  // Refusing a held lock is for builds started on their own, such as two
+  // builds of one configuration. A build that another build runs waits.
+  bool wait = config_.wait_for_lock || !chain.empty();
 
   const int64_t kPollMillis = 200;
   const int64_t kReportMillis = 60 * 1000;
@@ -1767,6 +1953,8 @@ bool NinjaMain::LockBuildDir(bool* waited) {
     switch (TryLockBuildDir(path, config_.dry_run, &err)) {
       case kLockTaken:
         WriteBuildLockOwner(path);
+        chain.push_back(canonical_path);
+        SetBuildLockChain(chain);
         return true;
       case kLockNotNeeded:
         return true;

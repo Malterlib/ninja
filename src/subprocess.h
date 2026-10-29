@@ -51,7 +51,11 @@ struct Subprocess {
 
   const std::string& GetOutput() const;
 
-  static void OverrideEnvironment(const std::string& environment);
+  /// \a unhashed_copies are variables, one per line, that the subprocesses
+  /// get from the environment of ninja too, without changing command hashes.
+  static void OverrideEnvironment(const std::string& environment,
+                                  const std::string& unhashed_copies =
+                                      std::string());
   static void AppendEnvironment(const std::string& environment);
 
  private:

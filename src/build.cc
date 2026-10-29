@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <functional>
 #include <unordered_set>
@@ -46,7 +47,24 @@
 
 using namespace std;
 
+const char kBuildLockChainVariable[] = "NINJA_BUILD_LOCK_CHAIN";
+
 namespace {
+
+/// Whether an environment block sets or copies the variable \a name.
+bool ListsEnvironmentVariable(const string& environment, const char* name) {
+  size_t name_length = strlen(name);
+  for (size_t start = 0; start <= environment.size();) {
+    size_t end = environment.find('\n', start);
+    if (end == string::npos)
+      end = environment.size();
+    if (environment.compare(start, name_length, name) == 0 &&
+        (start + name_length == end || environment[start + name_length] == '='))
+      return true;
+    start = end + 1;
+  }
+  return false;
+}
 
 /// A CommandRunner that doesn't actually run the commands.
 struct DryRunCommandRunner : public CommandRunner {
@@ -634,7 +652,13 @@ Builder::Builder(State* state, const BuildConfig& config, BuildLog* build_log,
     string environment =
         state_->bindings_.LookupVariable("override_environment");
     if (!environment.empty()) {
-      Subprocess::OverrideEnvironment(environment);
+      // The builds that a command runs need the chain of build locks, whatever
+      // the manifest copies from the environment of ninja
+      Subprocess::OverrideEnvironment(
+          environment,
+          ListsEnvironmentVariable(environment, kBuildLockChainVariable)
+              ? string()
+              : string(kBuildLockChainVariable));
       if (!state_->bindings_.LookupVariable("environment").empty())
         Fatal(
             "You cannot specify both 'override_environment'"

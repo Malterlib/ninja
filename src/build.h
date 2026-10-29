@@ -200,6 +200,11 @@ struct BuildConfig {
   double lock_timeout = -1.0;
 };
 
+/// The build directories that the builds running this ninja hold, as their
+/// canonical lock paths. Each ninja passes the chain to what it runs, with its
+/// own lock appended, so that a build that another build runs can tell.
+extern const char kBuildLockChainVariable[];
+
 /// Builder wraps the build process: starting commands, updating status.
 struct Builder {
   Builder(State* state, const BuildConfig& config, BuildLog* build_log,
