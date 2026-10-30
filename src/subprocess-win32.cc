@@ -55,14 +55,21 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
+namespace {
+
+/// The wide environment of ninja, which copies read. With main, the CRT builds
+/// it on the first call that asks for it.
+wchar_t** WideEnvironment() {
+  if (!_wenviron)
+    _wgetenv(L"PATH");
+  return _wenviron;
+}
+
+}  // namespace
+
 void Subprocess::OverrideEnvironment(const std::string& environment,
                                      const std::string& unhashed_copies) {
   overridden_environment = NullTerminatedStringArray();
-
-  // With main, the CRT builds the wide environment that the copies read on
-  // the first call that asks for it
-  if (!_wenviron)
-    _wgetenv(L"PATH");
 
   std::string all_variables = environment;
   if (!unhashed_copies.empty())
@@ -70,7 +77,8 @@ void Subprocess::OverrideEnvironment(const std::string& environment,
 
   std::set<std::wstring> overridden_variables;
   overridden_environment.AddEnvironment(Utf8ToWide(all_variables),
-                                        overridden_variables, _wenviron);
+                                        overridden_variables,
+                                        WideEnvironment());
   overridden_environment.GetPointerArray();
   overridden_environment.GetEnvironmentBlock();
 
@@ -229,7 +237,13 @@ bool Subprocess::Start(SubprocessSet* set) {
   NullTerminatedStringArray merged_environment;
   wchar_t* env_block = nullptr;
 
-  if (!args_.environment_.empty()) {
+  if (!args_.override_environment_.empty()) {
+    // Copies come from the environment of ninja, not from the one of the build
+    std::set<std::wstring> set_variables;
+    merged_environment.AddEnvironment(Utf8ToWide(args_.override_environment_),
+                                      set_variables, WideEnvironment());
+    env_block = merged_environment.GetEnvironmentBlock();
+  } else if (!args_.environment_.empty()) {
     std::set<std::wstring> set_variables;
     merged_environment.AddEnvironment(Utf8ToWide(args_.environment_),
                                       set_variables, nullptr);

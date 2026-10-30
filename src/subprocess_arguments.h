@@ -25,6 +25,8 @@ struct SubprocessArguments {
   std::string command_;
   std::string command_cwd_;
   std::string environment_;
+  /// Replaces the environment of the build for this command when not empty.
+  std::string override_environment_;
 
   bool use_console_ = false;
   bool command_raw_ = false;

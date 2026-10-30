@@ -198,7 +198,13 @@ bool Subprocess::Start(SubprocessSet* set) {
 
   char** spawn_environ = environ;
 
-  if (!args_.environment_.empty()) {
+  if (!args_.override_environment_.empty()) {
+    // Copies come from the environment of ninja, not from the one of the build
+    std::set<std::string> set_variables;
+    merged_environment.AddEnvironment(args_.override_environment_,
+                                      set_variables, environ);
+    spawn_environ = merged_environment.GetPointerArray();
+  } else if (!args_.environment_.empty()) {
     std::set<std::string> set_variables;
     merged_environment.AddEnvironment(args_.environment_, set_variables,
                                       nullptr);
