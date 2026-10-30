@@ -222,6 +222,14 @@ struct BuildConfig {
 /// own lock appended, so that a build that another build runs can tell.
 extern const char kBuildLockChainVariable[];
 
+/// The variables of \a names that an environment block sets or copies, in one
+/// pass over the block: bit i is set for names[i].
+unsigned ListedEnvironmentVariables(const std::string& environment,
+                                    const char* const* names, size_t count);
+
+/// Whether an environment block sets or copies the variable \a name.
+bool ListsEnvironmentVariable(const std::string& environment, const char* name);
+
 /// Builder wraps the build process: starting commands, updating status.
 struct Builder {
   Builder(State* state, const BuildConfig& config, BuildLog* build_log,
@@ -230,8 +238,8 @@ struct Builder {
   ~Builder();
 
   /// Set Jobserver client instance for this builder.
-  /// The commands whose environment the manifest replaces take part in the
-  /// jobserver too.
+  /// The commands whose environment the manifest or their rule replaces take
+  /// part in the jobserver too.
   void SetJobserverClient(std::unique_ptr<Jobserver::Client> jobserver_client);
 
   /// Clean up after interrupted commands by deleting output files.

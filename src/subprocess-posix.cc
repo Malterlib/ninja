@@ -46,6 +46,7 @@ using namespace std;
 
 namespace {
   NullTerminatedStringArray overridden_environment;
+  std::string jobserver_environment;
 #if defined(__linux__)
   int (*local_posix_spawn_file_actions_addchdir_np)(
     posix_spawn_file_actions_t* __restrict __actions,
@@ -98,6 +99,10 @@ void Subprocess::AppendEnvironment(const std::string& environment) {
   overridden_environment.GetPointerArray();
 
   BuildLog::LogEntry::GlobalEnvironmentHash(environment, false);
+}
+
+void Subprocess::SetJobserverEnvironment(const std::string& line) {
+  jobserver_environment = line;
 }
 
 bool Subprocess::Start(SubprocessSet* set) {
@@ -201,7 +206,19 @@ bool Subprocess::Start(SubprocessSet* set) {
 
   char** spawn_environ = environ;
 
-  if (!args_.environment_.empty()) {
+  if (!args_.override_environment_.empty()) {
+    // Copies come from the environment of ninja, not from the one of the build
+    NullTerminatedStringArray::VariableSet set_variables;
+    merged_environment.AddEnvironment(args_.override_environment_,
+                                      set_variables, environ);
+    // The command takes part in the jobserver of ninja, which isn't part of
+    // its hashed environment
+    if (!jobserver_environment.empty() &&
+        set_variables.find("MAKEFLAGS") == set_variables.end())
+      merged_environment.AddEnvironment(jobserver_environment, set_variables,
+                                        nullptr);
+    spawn_environ = merged_environment.GetPointerArray();
+  } else if (!args_.environment_.empty()) {
     NullTerminatedStringArray::VariableSet set_variables;
     merged_environment.AddEnvironment(args_.environment_, set_variables,
                                       nullptr);

@@ -57,6 +57,10 @@ struct Subprocess {
                                   const std::string& unhashed =
                                       std::string());
   static void AppendEnvironment(const std::string& environment);
+  /// \a line is the MAKEFLAGS of Jobserver::JobserverEnvironmentLine, which
+  /// the commands whose rule replaces their environment get unless the rule
+  /// sets MAKEFLAGS; empty without a jobserver.
+  static void SetJobserverEnvironment(const std::string& line);
 
  private:
   Subprocess(SubprocessArguments&& args);
