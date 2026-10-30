@@ -28,6 +28,7 @@ using namespace std;
 
 namespace {
   NullTerminatedStringArray overridden_environment;
+  std::wstring jobserver_environment;
 
   /// Convert UTF-8 string to UTF-16 wide string using Windows API.
   std::wstring Utf8ToWide(const std::string& utf8) {
@@ -55,25 +56,33 @@ Subprocess::~Subprocess() {
     Finish();
 }
 
+namespace {
+
+/// The wide environment of ninja, which copies read. With main, the CRT builds
+/// it on the first call that asks for it.
+wchar_t** WideEnvironment() {
+  if (!_wenviron)
+    _wgetenv(L"PATH");
+  return _wenviron;
+}
+
+}  // namespace
+
 void Subprocess::OverrideEnvironment(const std::string& environment,
                                      const std::string& unhashed) {
   overridden_environment = NullTerminatedStringArray();
-
-  // With main, the CRT builds the wide environment that the copies read on
-  // the first call that asks for it
-  if (!_wenviron)
-    _wgetenv(L"PATH");
 
   // Manifests that list the unhashed variables themselves have none, so the
   // block is only joined with them when there are any
   NullTerminatedStringArray::VariableSet overridden_variables;
   if (unhashed.empty()) {
     overridden_environment.AddEnvironment(Utf8ToWide(environment),
-                                          overridden_variables, _wenviron);
+                                          overridden_variables,
+                                          WideEnvironment());
   } else {
     overridden_environment.AddEnvironment(
         Utf8ToWide(environment + '\n' + unhashed), overridden_variables,
-        _wenviron);
+        WideEnvironment());
   }
   overridden_environment.GetPointerArray();
   overridden_environment.GetEnvironmentBlock();
@@ -92,6 +101,10 @@ void Subprocess::AppendEnvironment(const std::string& environment) {
   overridden_environment.GetEnvironmentBlock();
 
   BuildLog::LogEntry::GlobalEnvironmentHash(environment, false);
+}
+
+void Subprocess::SetJobserverEnvironment(const std::string& line) {
+  jobserver_environment = Utf8ToWide(line);
 }
 
 HANDLE Subprocess::SetupPipe(HANDLE ioport) {
@@ -233,7 +246,19 @@ bool Subprocess::Start(SubprocessSet* set) {
   NullTerminatedStringArray merged_environment;
   wchar_t* env_block = nullptr;
 
-  if (!args_.environment_.empty()) {
+  if (!args_.override_environment_.empty()) {
+    // Copies come from the environment of ninja, not from the one of the build
+    NullTerminatedStringArray::VariableSet set_variables;
+    merged_environment.AddEnvironment(Utf8ToWide(args_.override_environment_),
+                                      set_variables, WideEnvironment());
+    // The command takes part in the jobserver of ninja, which isn't part of
+    // its hashed environment
+    if (!jobserver_environment.empty() &&
+        set_variables.find(L"MAKEFLAGS") == set_variables.end())
+      merged_environment.AddEnvironment(jobserver_environment, set_variables,
+                                        nullptr);
+    env_block = merged_environment.GetEnvironmentBlock();
+  } else if (!args_.environment_.empty()) {
     NullTerminatedStringArray::VariableSet set_variables;
     merged_environment.AddEnvironment(Utf8ToWide(args_.environment_),
                                       set_variables, nullptr);

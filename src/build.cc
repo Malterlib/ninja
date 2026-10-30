@@ -72,8 +72,8 @@ bool IsVariableName(const char* listed, size_t length, const char* name) {
   return !name[length];
 }
 
-/// The variables of \a names that an environment block sets or copies, in one
-/// pass over the block: bit i is set for names[i].
+}  // namespace
+
 unsigned ListedEnvironmentVariables(const string& environment,
                                     const char* const* names, size_t count) {
   unsigned listed = 0;
@@ -97,6 +97,12 @@ unsigned ListedEnvironmentVariables(const string& environment,
   }
   return listed;
 }
+
+bool ListsEnvironmentVariable(const string& environment, const char* name) {
+  return ListedEnvironmentVariables(environment, &name, 1) != 0;
+}
+
+namespace {
 
 /// A CommandRunner that doesn't actually run the commands.
 struct DryRunCommandRunner : public CommandRunner {
@@ -684,15 +690,17 @@ Builder::Builder(State* state, const BuildConfig& config, BuildLog* build_log,
     lock_file_path_ = build_dir + "/" + lock_file_path_;
   status_->SetExplanations(explanations_.get());
   if (state->minimum_version_ >= kFeatureVersion_ExtendedProcessLaunch) {
+    // Until the builder takes part in a jobserver (SetJobserverClient), the
+    // commands whose environment the manifest or their rule replaces get none
+    Subprocess::SetJobserverEnvironment(string());
     string environment =
         state_->bindings_.LookupVariable("override_environment");
     if (!environment.empty()) {
       // The builds that a command runs need the chain of build locks, whatever
       // the manifest copies from the environment of ninja
-      const char* const lock_chain_name = kBuildLockChainVariable;
       Subprocess::OverrideEnvironment(
           environment,
-          ListedEnvironmentVariables(environment, &lock_chain_name, 1)
+          ListsEnvironmentVariable(environment, kBuildLockChainVariable)
               ? string()
               : string(kBuildLockChainVariable));
       if (!state_->bindings_.LookupVariable("environment").empty())
@@ -716,6 +724,8 @@ void Builder::SetJobserverClient(
   string jobserver_line = Jobserver::JobserverEnvironmentLine();
   if (jobserver_line.empty())
     return;
+  Subprocess::SetJobserverEnvironment(jobserver_line);
+
   // The block of the manifest gets the options of the jobserver unhashed, as
   // the chain of build locks, unless it copies or sets MAKEFLAGS itself
   string environment = state_->bindings_.LookupVariable("override_environment");
