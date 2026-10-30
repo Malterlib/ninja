@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include "build.h"
 #include "build_log.h"
 #include "debug_flags.h"
 #include "depfile_parser.h"
@@ -511,7 +512,24 @@ void Edge::EvaluateCommand(SubprocessArguments& args, int version,
     bool use_raw = GetBindingBool("command_raw");
     args.command_raw_ = use_raw;
     args.command_ = GetBinding("command", use_raw);
-    args.environment_ = GetBinding("environment", true);
+    // Only the rule's own binding, not one of a build statement: the file scope
+    // binding of the same name is the environment of every rule, and the scope
+    // of a build statement falls back to it
+    if (const EvalString* override_environment =
+            rule_->GetBinding("override_environment")) {
+      EdgeEnv env(this, EdgeEnv::kRawEscape);
+      args.override_environment_ = override_environment->Evaluate(&env);
+      // The builds that a command runs need the chain of build locks. It also
+      // keeps an empty block from reading as no override.
+      if (!ListsEnvironmentVariable(args.override_environment_,
+                                    kBuildLockChainVariable)) {
+        if (!args.override_environment_.empty())
+          args.override_environment_ += '\n';
+        args.override_environment_ += kBuildLockChainVariable;
+      }
+    } else {
+      args.environment_ = GetBinding("environment", true);
+    }
     args.command_cwd_ = GetUnescapedBinding("command_cwd");
   } else {
     args.command_ = GetBinding("command", false);

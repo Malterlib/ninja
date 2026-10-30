@@ -172,6 +172,13 @@ bool ManifestParser::ParseRule(string* err) {
   if (rule->bindings_["command"].empty())
     return lexer_.Error("expected 'command =' line", err);
 
+  // Without inserting bindings: an empty rule binding hides the one of the scope
+  if (rule->GetBinding("environment") &&
+      rule->GetBinding("override_environment")) {
+    return lexer_.Error("a rule cannot specify both 'override_environment' "
+                        "and 'environment'", err);
+  }
+
   env_->AddRule(std::move(rule));
   return true;
 }

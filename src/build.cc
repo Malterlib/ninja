@@ -49,9 +49,6 @@ using namespace std;
 
 const char kBuildLockChainVariable[] = "NINJA_BUILD_LOCK_CHAIN";
 
-namespace {
-
-/// Whether an environment block sets or copies the variable \a name.
 bool ListsEnvironmentVariable(const string& environment, const char* name) {
   size_t name_length = strlen(name);
   for (size_t start = 0; start <= environment.size();) {
@@ -65,6 +62,8 @@ bool ListsEnvironmentVariable(const string& environment, const char* name) {
   }
   return false;
 }
+
+namespace {
 
 /// A CommandRunner that doesn't actually run the commands.
 struct DryRunCommandRunner : public CommandRunner {

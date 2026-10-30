@@ -79,7 +79,8 @@ bool Rule::IsReservedBinding(const string& var, int version) {
   if (version >= kFeatureVersion_ExtendedProcessLaunch) {
     if (var == "command_cwd" ||
         var == "command_raw" ||
-        var == "environment")
+        var == "environment" ||
+        var == "override_environment")
       return true;
   }
 

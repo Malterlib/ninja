@@ -77,7 +77,12 @@ uint64_t BuildLog::LogEntry::HashCommand(const SubprocessArguments& args) {
   if (args.command_raw_)
     hash ^= command_raw_hash;
 
-  if (global_environment_hash)
+  // A command whose rule replaces the environment does not get the global one
+  if (args.override_environment_.size())
+    hash ^= rapidhash(args.override_environment_.c_str(),
+                      args.override_environment_.size()) ^
+            rapidhash("rule override", 13);
+  else if (global_environment_hash)
     hash ^= global_environment_hash;
 
   return hash;

@@ -205,6 +205,9 @@ struct BuildConfig {
 /// own lock appended, so that a build that another build runs can tell.
 extern const char kBuildLockChainVariable[];
 
+/// Whether an environment block sets or copies the variable \a name.
+bool ListsEnvironmentVariable(const std::string& environment, const char* name);
+
 /// Builder wraps the build process: starting commands, updating status.
 struct Builder {
   Builder(State* state, const BuildConfig& config, BuildLog* build_log,
